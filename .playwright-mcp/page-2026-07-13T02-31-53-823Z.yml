@@ -1,0 +1,603 @@
+- generic [active] [ref=f2e1]:
+  - link "Skip to content" [ref=f2e2] [cursor=pointer]:
+    - /url: "#inbound"
+  - banner [ref=f2e3]:
+    - navigation "Header" [ref=f2e4]:
+      - link "sing-box" [ref=f2e5] [cursor=pointer]:
+        - /url: ../..
+        - img "logo" [ref=f2e6]
+      - generic [ref=f2e8]:
+        - generic [ref=f2e9]: sing-box
+        - generic: Inbound
+      - generic [ref=f2e11]:
+        - radio "Switch to light mode"
+        - generic "Switch to light mode" [ref=f2e12] [cursor=pointer]
+        - radio "Switch to dark mode"
+        - radio "Switch to system preference"
+      - generic [ref=f2e16]:
+        - button "Select language" [ref=f2e17] [cursor=pointer]
+        - generic:
+          - list:
+            - listitem [ref=f2e20]:
+              - link "English" [ref=f2e21] [cursor=pointer]:
+                - /url: ./
+            - listitem [ref=f2e22]:
+              - link "简体中文" [ref=f2e23] [cursor=pointer]:
+                - /url: ../../zh/configuration/inbound/
+      - dialog [ref=f2e24]:
+        - search [ref=f2e25]:
+          - generic [ref=f2e26]:
+            - textbox "Search" [ref=f2e27]
+            - navigation "Search":
+              - button "Clear"
+          - generic: Type to start searching
+      - link [ref=f2e31] [cursor=pointer]:
+        - /url: https://github.com/SagerNet/sing-box
+        - generic [ref=f2e35]:
+          - text: SagerNet/sing-box
+          - list [ref=f2e36]:
+            - listitem [ref=f2e37]: v1.13.14
+            - listitem [ref=f2e38]: 35.9k
+            - listitem [ref=f2e39]: 4.3k
+  - generic [ref=f2e40]:
+    - navigation "Tabs" [ref=f2e41]:
+      - list [ref=f2e43]:
+        - listitem [ref=f2e44]:
+          - link "Home" [ref=f2e45] [cursor=pointer]:
+            - /url: ../..
+        - listitem [ref=f2e46]:
+          - link "Installation" [ref=f2e47] [cursor=pointer]:
+            - /url: ../../installation/package-manager/
+        - listitem [ref=f2e48]:
+          - link "Graphical Clients" [ref=f2e49] [cursor=pointer]:
+            - /url: ../../clients/
+        - listitem [ref=f2e50]:
+          - link "Manual" [ref=f2e51] [cursor=pointer]:
+            - /url: ../../manual/proxy/server/
+        - listitem [ref=f2e52]:
+          - link "Configuration" [ref=f2e53] [cursor=pointer]:
+            - /url: ../
+    - main [ref=f2e54]:
+      - generic [ref=f2e55]:
+        - navigation "Navigation" [ref=f2e59]:
+          - list [ref=f2e60]:
+            - listitem [ref=f2e61]:
+              - link "Configuration" [ref=f2e63] [cursor=pointer]:
+                - /url: ../
+              - navigation [ref=f2e65]:
+                - list [ref=f2e66]:
+                  - listitem [ref=f2e67]:
+                    - link "Log" [ref=f2e69] [cursor=pointer]:
+                      - /url: ../log/
+                    - navigation [ref=f2e71]:
+                      - list [ref=f2e72]
+                  - listitem [ref=f2e73]:
+                    - link "DNS" [ref=f2e75] [cursor=pointer]:
+                      - /url: ../dns/
+                    - navigation [ref=f2e79]:
+                      - list [ref=f2e80]:
+                        - listitem [ref=f2e81]:
+                          - link "DNS Server" [ref=f2e83] [cursor=pointer]:
+                            - /url: ../dns/server/
+                          - navigation [ref=f2e89]:
+                            - list [ref=f2e90]:
+                              - listitem [ref=f2e91]:
+                                - link "Legacy" [ref=f2e92] [cursor=pointer]:
+                                  - /url: ../dns/server/legacy/
+                              - listitem [ref=f2e96]:
+                                - link "Local" [ref=f2e97] [cursor=pointer]:
+                                  - /url: ../dns/server/local/
+                              - listitem [ref=f2e101]:
+                                - link "Hosts" [ref=f2e102] [cursor=pointer]:
+                                  - /url: ../dns/server/hosts/
+                              - listitem [ref=f2e106]:
+                                - link "TCP" [ref=f2e107] [cursor=pointer]:
+                                  - /url: ../dns/server/tcp/
+                              - listitem [ref=f2e111]:
+                                - link "UDP" [ref=f2e112] [cursor=pointer]:
+                                  - /url: ../dns/server/udp/
+                              - listitem [ref=f2e116]:
+                                - link "TLS" [ref=f2e117] [cursor=pointer]:
+                                  - /url: ../dns/server/tls/
+                              - listitem [ref=f2e121]:
+                                - link "QUIC" [ref=f2e122] [cursor=pointer]:
+                                  - /url: ../dns/server/quic/
+                              - listitem [ref=f2e126]:
+                                - link "HTTPS" [ref=f2e127] [cursor=pointer]:
+                                  - /url: ../dns/server/https/
+                              - listitem [ref=f2e131]:
+                                - link "HTTP3" [ref=f2e132] [cursor=pointer]:
+                                  - /url: ../dns/server/http3/
+                              - listitem [ref=f2e136]:
+                                - link "DHCP" [ref=f2e137] [cursor=pointer]:
+                                  - /url: ../dns/server/dhcp/
+                              - listitem [ref=f2e141]:
+                                - link "mDNS" [ref=f2e142] [cursor=pointer]:
+                                  - /url: ../dns/server/mdns/
+                              - listitem [ref=f2e146]:
+                                - link "FakeIP" [ref=f2e147] [cursor=pointer]:
+                                  - /url: ../dns/server/fakeip/
+                              - listitem [ref=f2e151]:
+                                - link "Tailscale" [ref=f2e152] [cursor=pointer]:
+                                  - /url: ../dns/server/tailscale/
+                              - listitem [ref=f2e156]:
+                                - link "Resolved" [ref=f2e157] [cursor=pointer]:
+                                  - /url: ../dns/server/resolved/
+                        - listitem [ref=f2e161]:
+                          - link "DNS Rule" [ref=f2e162] [cursor=pointer]:
+                            - /url: ../dns/rule/
+                        - listitem [ref=f2e166]:
+                          - link "DNS Rule Action" [ref=f2e167] [cursor=pointer]:
+                            - /url: ../dns/rule_action/
+                        - listitem [ref=f2e171]:
+                          - link "FakeIP" [ref=f2e172] [cursor=pointer]:
+                            - /url: ../dns/fakeip/
+                  - listitem [ref=f2e176]:
+                    - link "NTP" [ref=f2e177] [cursor=pointer]:
+                      - /url: ../ntp/
+                  - listitem [ref=f2e179]:
+                    - link "Certificate" [ref=f2e180] [cursor=pointer]:
+                      - /url: ../certificate/
+                  - listitem [ref=f2e184]:
+                    - link "Route" [ref=f2e186] [cursor=pointer]:
+                      - /url: ../route/
+                    - navigation [ref=f2e190]:
+                      - list [ref=f2e191]:
+                        - listitem [ref=f2e192]:
+                          - link "GeoIP" [ref=f2e193] [cursor=pointer]:
+                            - /url: ../route/geoip/
+                        - listitem [ref=f2e197]:
+                          - link "Geosite" [ref=f2e198] [cursor=pointer]:
+                            - /url: ../route/geosite/
+                        - listitem [ref=f2e202]:
+                          - link "Route Rule" [ref=f2e203] [cursor=pointer]:
+                            - /url: ../route/rule/
+                        - listitem [ref=f2e207]:
+                          - link "Rule Action" [ref=f2e208] [cursor=pointer]:
+                            - /url: ../route/rule_action/
+                        - listitem [ref=f2e212]:
+                          - link "Protocol Sniff" [ref=f2e213] [cursor=pointer]:
+                            - /url: ../route/sniff/
+                  - listitem [ref=f2e215]:
+                    - link "Rule Set" [ref=f2e217] [cursor=pointer]:
+                      - /url: ../rule-set/
+                    - navigation [ref=f2e219]:
+                      - list [ref=f2e220]:
+                        - listitem [ref=f2e221]:
+                          - link "Source Format" [ref=f2e222] [cursor=pointer]:
+                            - /url: ../rule-set/source-format/
+                        - listitem [ref=f2e226]:
+                          - link "Headless Rule" [ref=f2e227] [cursor=pointer]:
+                            - /url: ../rule-set/headless-rule/
+                        - listitem [ref=f2e231]:
+                          - link "AdGuard DNS Filer" [ref=f2e232] [cursor=pointer]:
+                            - /url: ../rule-set/adguard/
+                  - listitem [ref=f2e234]:
+                    - link "Experimental" [ref=f2e236] [cursor=pointer]:
+                      - /url: ../experimental/
+                    - navigation [ref=f2e238]:
+                      - list [ref=f2e239]:
+                        - listitem [ref=f2e240]:
+                          - link "Cache File" [ref=f2e241] [cursor=pointer]:
+                            - /url: ../experimental/cache-file/
+                        - listitem [ref=f2e243]:
+                          - link "Clash API" [ref=f2e244] [cursor=pointer]:
+                            - /url: ../experimental/clash-api/
+                        - listitem [ref=f2e246]:
+                          - link "V2Ray API" [ref=f2e247] [cursor=pointer]:
+                            - /url: ../experimental/v2ray-api/
+                  - listitem [ref=f2e249]:
+                    - generic: Shared
+                    - navigation "Shared" [ref=f2e250]:
+                      - list [ref=f2e251]:
+                        - listitem [ref=f2e252]:
+                          - link "Listen Fields" [ref=f2e253] [cursor=pointer]:
+                            - /url: ../shared/listen/
+                        - listitem [ref=f2e257]:
+                          - link "Dial Fields" [ref=f2e258] [cursor=pointer]:
+                            - /url: ../shared/dial/
+                        - listitem [ref=f2e262]:
+                          - link "TLS" [ref=f2e263] [cursor=pointer]:
+                            - /url: ../shared/tls/
+                        - listitem [ref=f2e267]:
+                          - link "HTTP Client" [ref=f2e268] [cursor=pointer]:
+                            - /url: ../shared/http-client/
+                        - listitem [ref=f2e272]:
+                          - link "HTTP2 Fields" [ref=f2e273] [cursor=pointer]:
+                            - /url: ../shared/http2/
+                        - listitem [ref=f2e277]:
+                          - link "QUIC Fields" [ref=f2e278] [cursor=pointer]:
+                            - /url: ../shared/quic/
+                        - listitem [ref=f2e282]:
+                          - link "Certificate Provider" [ref=f2e284] [cursor=pointer]:
+                            - /url: ../shared/certificate-provider/
+                          - navigation [ref=f2e290]:
+                            - list [ref=f2e291]:
+                              - listitem [ref=f2e292]:
+                                - link "ACME" [ref=f2e293] [cursor=pointer]:
+                                  - /url: ../shared/certificate-provider/acme/
+                              - listitem [ref=f2e297]:
+                                - link "Tailscale" [ref=f2e298] [cursor=pointer]:
+                                  - /url: ../shared/certificate-provider/tailscale/
+                              - listitem [ref=f2e302]:
+                                - link "Cloudflare Origin CA" [ref=f2e303] [cursor=pointer]:
+                                  - /url: ../shared/certificate-provider/cloudflare-origin-ca/
+                        - listitem [ref=f2e307]:
+                          - link "DNS01 Challenge Fields" [ref=f2e308] [cursor=pointer]:
+                            - /url: ../shared/dns01_challenge/
+                        - listitem [ref=f2e312]:
+                          - link "Pre-match" [ref=f2e313] [cursor=pointer]:
+                            - /url: ../shared/pre-match/
+                        - listitem [ref=f2e317]:
+                          - link "Multiplex" [ref=f2e318] [cursor=pointer]:
+                            - /url: ../shared/multiplex/
+                        - listitem [ref=f2e320]:
+                          - link "V2Ray Transport" [ref=f2e321] [cursor=pointer]:
+                            - /url: ../shared/v2ray-transport/
+                        - listitem [ref=f2e323]:
+                          - link "UDP over TCP" [ref=f2e324] [cursor=pointer]:
+                            - /url: ../shared/udp-over-tcp/
+                        - listitem [ref=f2e326]:
+                          - link "TCP Brutal" [ref=f2e327] [cursor=pointer]:
+                            - /url: ../shared/tcp-brutal/
+                        - listitem [ref=f2e329]:
+                          - link "Wi-Fi State" [ref=f2e330] [cursor=pointer]:
+                            - /url: ../shared/wifi-state/
+                        - listitem [ref=f2e334]:
+                          - link "Neighbor Resolution" [ref=f2e335] [cursor=pointer]:
+                            - /url: ../shared/neighbor/
+                  - listitem [ref=f2e339]:
+                    - link "Network Namespace" [ref=f2e341] [cursor=pointer]:
+                      - /url: ../network-namespace/
+                    - navigation [ref=f2e345]:
+                      - list [ref=f2e346]:
+                        - listitem [ref=f2e347]:
+                          - link "Default" [ref=f2e348] [cursor=pointer]:
+                            - /url: ../network-namespace/default/
+                        - listitem [ref=f2e352]:
+                          - link "Unshare" [ref=f2e353] [cursor=pointer]:
+                            - /url: ../network-namespace/unshare/
+                  - listitem [ref=f2e357]:
+                    - link "Endpoint" [ref=f2e359] [cursor=pointer]:
+                      - /url: ../endpoint/
+                    - navigation [ref=f2e361]:
+                      - list [ref=f2e362]:
+                        - listitem [ref=f2e363]:
+                          - link "WireGuard" [ref=f2e364] [cursor=pointer]:
+                            - /url: ../endpoint/wireguard/
+                        - listitem [ref=f2e366]:
+                          - link "Tailscale" [ref=f2e367] [cursor=pointer]:
+                            - /url: ../endpoint/tailscale/
+                  - listitem [ref=f2e371]:
+                    - link "Inbound" [ref=f2e373] [cursor=pointer]:
+                      - /url: ./
+                    - navigation [ref=f2e375]:
+                      - list [ref=f2e376]:
+                        - listitem [ref=f2e377]:
+                          - link "Direct" [ref=f2e378] [cursor=pointer]:
+                            - /url: direct/
+                        - listitem [ref=f2e380]:
+                          - link "Mixed" [ref=f2e381] [cursor=pointer]:
+                            - /url: mixed/
+                        - listitem [ref=f2e383]:
+                          - link "SOCKS" [ref=f2e384] [cursor=pointer]:
+                            - /url: socks/
+                        - listitem [ref=f2e386]:
+                          - link "HTTP" [ref=f2e387] [cursor=pointer]:
+                            - /url: http/
+                        - listitem [ref=f2e389]:
+                          - link "Shadowsocks" [ref=f2e390] [cursor=pointer]:
+                            - /url: shadowsocks/
+                        - listitem [ref=f2e392]:
+                          - link "VMess" [ref=f2e393] [cursor=pointer]:
+                            - /url: vmess/
+                        - listitem [ref=f2e395]:
+                          - link "Trojan" [ref=f2e396] [cursor=pointer]:
+                            - /url: trojan/
+                        - listitem [ref=f2e398]:
+                          - link "Naive" [ref=f2e399] [cursor=pointer]:
+                            - /url: naive/
+                        - listitem [ref=f2e401]:
+                          - link "Hysteria" [ref=f2e402] [cursor=pointer]:
+                            - /url: hysteria/
+                        - listitem [ref=f2e404]:
+                          - link "ShadowTLS" [ref=f2e405] [cursor=pointer]:
+                            - /url: shadowtls/
+                        - listitem [ref=f2e409]:
+                          - link "VLESS" [ref=f2e410] [cursor=pointer]:
+                            - /url: vless/
+                        - listitem [ref=f2e412]:
+                          - link "TUIC" [ref=f2e413] [cursor=pointer]:
+                            - /url: tuic/
+                        - listitem [ref=f2e415]:
+                          - link "Hysteria2" [ref=f2e416] [cursor=pointer]:
+                            - /url: hysteria2/
+                        - listitem [ref=f2e420]:
+                          - link "AnyTLS" [ref=f2e421] [cursor=pointer]:
+                            - /url: anytls/
+                        - listitem [ref=f2e425]:
+                          - link "Snell" [ref=f2e426] [cursor=pointer]:
+                            - /url: snell/
+                        - listitem [ref=f2e430]:
+                          - link "Tun" [ref=f2e431] [cursor=pointer]:
+                            - /url: tun/
+                        - listitem [ref=f2e435]:
+                          - link "Redirect" [ref=f2e436] [cursor=pointer]:
+                            - /url: redirect/
+                        - listitem [ref=f2e438]:
+                          - link "TProxy" [ref=f2e439] [cursor=pointer]:
+                            - /url: tproxy/
+                        - listitem [ref=f2e441]:
+                          - link "Cloudflared" [ref=f2e442] [cursor=pointer]:
+                            - /url: cloudflared/
+                  - listitem [ref=f2e446]:
+                    - link "Outbound" [ref=f2e448] [cursor=pointer]:
+                      - /url: ../outbound/
+                    - navigation [ref=f2e450]:
+                      - list [ref=f2e451]:
+                        - listitem [ref=f2e452]:
+                          - link "Direct" [ref=f2e453] [cursor=pointer]:
+                            - /url: ../outbound/direct/
+                        - listitem [ref=f2e457]:
+                          - link "Bridge" [ref=f2e458] [cursor=pointer]:
+                            - /url: ../outbound/bridge/
+                        - listitem [ref=f2e462]:
+                          - link "Block" [ref=f2e463] [cursor=pointer]:
+                            - /url: ../outbound/block/
+                        - listitem [ref=f2e467]:
+                          - link "SOCKS" [ref=f2e468] [cursor=pointer]:
+                            - /url: ../outbound/socks/
+                        - listitem [ref=f2e470]:
+                          - link "HTTP" [ref=f2e471] [cursor=pointer]:
+                            - /url: ../outbound/http/
+                        - listitem [ref=f2e473]:
+                          - link "Shadowsocks" [ref=f2e474] [cursor=pointer]:
+                            - /url: ../outbound/shadowsocks/
+                        - listitem [ref=f2e476]:
+                          - link "VMess" [ref=f2e477] [cursor=pointer]:
+                            - /url: ../outbound/vmess/
+                        - listitem [ref=f2e479]:
+                          - link "Trojan" [ref=f2e480] [cursor=pointer]:
+                            - /url: ../outbound/trojan/
+                        - listitem [ref=f2e482]:
+                          - link "Naive" [ref=f2e483] [cursor=pointer]:
+                            - /url: ../outbound/naive/
+                        - listitem [ref=f2e487]:
+                          - link "WireGuard" [ref=f2e488] [cursor=pointer]:
+                            - /url: ../outbound/wireguard/
+                        - listitem [ref=f2e492]:
+                          - link "Hysteria" [ref=f2e493] [cursor=pointer]:
+                            - /url: ../outbound/hysteria/
+                        - listitem [ref=f2e497]:
+                          - link "ShadowTLS" [ref=f2e498] [cursor=pointer]:
+                            - /url: ../outbound/shadowtls/
+                        - listitem [ref=f2e500]:
+                          - link "VLESS" [ref=f2e501] [cursor=pointer]:
+                            - /url: ../outbound/vless/
+                        - listitem [ref=f2e503]:
+                          - link "TUIC" [ref=f2e504] [cursor=pointer]:
+                            - /url: ../outbound/tuic/
+                        - listitem [ref=f2e506]:
+                          - link "Hysteria2" [ref=f2e507] [cursor=pointer]:
+                            - /url: ../outbound/hysteria2/
+                        - listitem [ref=f2e509]:
+                          - link "AnyTLS" [ref=f2e510] [cursor=pointer]:
+                            - /url: ../outbound/anytls/
+                        - listitem [ref=f2e514]:
+                          - link "Snell" [ref=f2e515] [cursor=pointer]:
+                            - /url: ../outbound/snell/
+                        - listitem [ref=f2e519]:
+                          - link "Tor" [ref=f2e520] [cursor=pointer]:
+                            - /url: ../outbound/tor/
+                        - listitem [ref=f2e522]:
+                          - link "SSH" [ref=f2e523] [cursor=pointer]:
+                            - /url: ../outbound/ssh/
+                        - listitem [ref=f2e525]:
+                          - link "DNS" [ref=f2e526] [cursor=pointer]:
+                            - /url: ../outbound/dns/
+                        - listitem [ref=f2e530]:
+                          - link "Selector" [ref=f2e531] [cursor=pointer]:
+                            - /url: ../outbound/selector/
+                        - listitem [ref=f2e533]:
+                          - link "URLTest" [ref=f2e534] [cursor=pointer]:
+                            - /url: ../outbound/urltest/
+                  - listitem [ref=f2e536]:
+                    - link "Service" [ref=f2e538] [cursor=pointer]:
+                      - /url: ../service/
+                    - navigation [ref=f2e542]:
+                      - list [ref=f2e543]:
+                        - listitem [ref=f2e544]:
+                          - link "sing-box API" [ref=f2e545] [cursor=pointer]:
+                            - /url: ../service/api/
+                        - listitem [ref=f2e549]:
+                          - link "DERP" [ref=f2e550] [cursor=pointer]:
+                            - /url: ../service/derp/
+                        - listitem [ref=f2e554]:
+                          - link "Resolved" [ref=f2e555] [cursor=pointer]:
+                            - /url: ../service/resolved/
+                        - listitem [ref=f2e559]:
+                          - link "SSM API" [ref=f2e560] [cursor=pointer]:
+                            - /url: ../service/ssm-api/
+                        - listitem [ref=f2e564]:
+                          - link "CCM" [ref=f2e565] [cursor=pointer]:
+                            - /url: ../service/ccm/
+                        - listitem [ref=f2e569]:
+                          - link "OCM" [ref=f2e570] [cursor=pointer]:
+                            - /url: ../service/ocm/
+                        - listitem [ref=f2e574]:
+                          - link "Hysteria Realm" [ref=f2e575] [cursor=pointer]:
+                            - /url: ../service/hysteria-realm/
+                        - listitem [ref=f2e579]:
+                          - link "USB/IP Server" [ref=f2e580] [cursor=pointer]:
+                            - /url: ../service/usbip-server/
+                        - listitem [ref=f2e584]:
+                          - link "USB/IP Client" [ref=f2e585] [cursor=pointer]:
+                            - /url: ../service/usbip-client/
+        - navigation "Table of contents" [ref=f2e592]:
+          - list [ref=f2e594]:
+            - listitem [ref=f2e595]:
+              - link "Structure" [ref=f2e596] [cursor=pointer]:
+                - /url: "#structure"
+            - listitem [ref=f2e598]:
+              - link "Fields" [ref=f2e599] [cursor=pointer]:
+                - /url: "#fields"
+              - navigation "Fields" [ref=f2e601]:
+                - list [ref=f2e602]:
+                  - listitem [ref=f2e603]:
+                    - link "tag" [ref=f2e604] [cursor=pointer]:
+                      - /url: "#tag"
+        - article [ref=f2e607]:
+          - heading "Inbound" [level=1] [ref=f2e608]
+          - heading "Structure" [level=3] [ref=f2e609]
+          - generic [ref=f2e611]:
+            - navigation [ref=f2e612]:
+              - button "Copy to clipboard" [ref=f2e613] [cursor=pointer]
+            - code [ref=f2e614]: "{ \"inbounds\": [ { \"type\": \"\", \"tag\": \"\" } ] }"
+          - heading "Fields" [level=3] [ref=f2e615]
+          - table [ref=f2e618]:
+            - rowgroup [ref=f2e619]:
+              - row [ref=f2e620]:
+                - columnheader "Type" [ref=f2e621]
+                - columnheader "Format" [ref=f2e622]
+                - columnheader "Injectable" [ref=f2e623]
+            - rowgroup [ref=f2e624]:
+              - row [ref=f2e625]:
+                - cell [ref=f2e626]:
+                  - code [ref=f2e627]: direct
+                - cell [ref=f2e628]:
+                  - link "Direct" [ref=f2e629] [cursor=pointer]:
+                    - /url: ./direct/
+                - cell [ref=f2e630]
+              - row [ref=f2e634]:
+                - cell [ref=f2e635]:
+                  - code [ref=f2e636]: mixed
+                - cell [ref=f2e637]:
+                  - link "Mixed" [ref=f2e638] [cursor=pointer]:
+                    - /url: ./mixed/
+                - cell "TCP" [ref=f2e639]
+              - row [ref=f2e640]:
+                - cell [ref=f2e641]:
+                  - code [ref=f2e642]: socks
+                - cell [ref=f2e643]:
+                  - link "SOCKS" [ref=f2e644] [cursor=pointer]:
+                    - /url: ./socks/
+                - cell "TCP" [ref=f2e645]
+              - row [ref=f2e646]:
+                - cell [ref=f2e647]:
+                  - code [ref=f2e648]: http
+                - cell [ref=f2e649]:
+                  - link "HTTP" [ref=f2e650] [cursor=pointer]:
+                    - /url: ./http/
+                - cell "TCP" [ref=f2e651]
+              - row [ref=f2e652]:
+                - cell [ref=f2e653]:
+                  - code [ref=f2e654]: shadowsocks
+                - cell [ref=f2e655]:
+                  - link "Shadowsocks" [ref=f2e656] [cursor=pointer]:
+                    - /url: ./shadowsocks/
+                - cell "TCP" [ref=f2e657]
+              - row [ref=f2e658]:
+                - cell [ref=f2e659]:
+                  - code [ref=f2e660]: vmess
+                - cell [ref=f2e661]:
+                  - link "VMess" [ref=f2e662] [cursor=pointer]:
+                    - /url: ./vmess/
+                - cell "TCP" [ref=f2e663]
+              - row [ref=f2e664]:
+                - cell [ref=f2e665]:
+                  - code [ref=f2e666]: trojan
+                - cell [ref=f2e667]:
+                  - link "Trojan" [ref=f2e668] [cursor=pointer]:
+                    - /url: ./trojan/
+                - cell "TCP" [ref=f2e669]
+              - row [ref=f2e670]:
+                - cell [ref=f2e671]:
+                  - code [ref=f2e672]: naive
+                - cell [ref=f2e673]:
+                  - link "Naive" [ref=f2e674] [cursor=pointer]:
+                    - /url: ./naive/
+                - cell [ref=f2e675]
+              - row [ref=f2e679]:
+                - cell [ref=f2e680]:
+                  - code [ref=f2e681]: hysteria
+                - cell [ref=f2e682]:
+                  - link "Hysteria" [ref=f2e683] [cursor=pointer]:
+                    - /url: ./hysteria/
+                - cell [ref=f2e684]
+              - row [ref=f2e688]:
+                - cell [ref=f2e689]:
+                  - code [ref=f2e690]: shadowtls
+                - cell [ref=f2e691]:
+                  - link "ShadowTLS" [ref=f2e692] [cursor=pointer]:
+                    - /url: ./shadowtls/
+                - cell "TCP" [ref=f2e693]
+              - row [ref=f2e694]:
+                - cell [ref=f2e695]:
+                  - code [ref=f2e696]: tuic
+                - cell [ref=f2e697]:
+                  - link "TUIC" [ref=f2e698] [cursor=pointer]:
+                    - /url: ./tuic/
+                - cell [ref=f2e699]
+              - row [ref=f2e703]:
+                - cell [ref=f2e704]:
+                  - code [ref=f2e705]: hysteria2
+                - cell [ref=f2e706]:
+                  - link "Hysteria2" [ref=f2e707] [cursor=pointer]:
+                    - /url: ./hysteria2/
+                - cell [ref=f2e708]
+              - row [ref=f2e712]:
+                - cell [ref=f2e713]:
+                  - code [ref=f2e714]: vless
+                - cell [ref=f2e715]:
+                  - link "VLESS" [ref=f2e716] [cursor=pointer]:
+                    - /url: ./vless/
+                - cell "TCP" [ref=f2e717]
+              - row [ref=f2e718]:
+                - cell [ref=f2e719]:
+                  - code [ref=f2e720]: anytls
+                - cell [ref=f2e721]:
+                  - link "AnyTLS" [ref=f2e722] [cursor=pointer]:
+                    - /url: ./anytls/
+                - cell "TCP" [ref=f2e723]
+              - row [ref=f2e724]:
+                - cell [ref=f2e725]:
+                  - code [ref=f2e726]: snell
+                - cell [ref=f2e727]:
+                  - link "Snell" [ref=f2e728] [cursor=pointer]:
+                    - /url: ./snell/
+                - cell "TCP" [ref=f2e729]
+              - row [ref=f2e730]:
+                - cell [ref=f2e731]:
+                  - code [ref=f2e732]: tun
+                - cell [ref=f2e733]:
+                  - link "Tun" [ref=f2e734] [cursor=pointer]:
+                    - /url: ./tun/
+                - cell [ref=f2e735]
+              - row [ref=f2e739]:
+                - cell [ref=f2e740]:
+                  - code [ref=f2e741]: redirect
+                - cell [ref=f2e742]:
+                  - link "Redirect" [ref=f2e743] [cursor=pointer]:
+                    - /url: ./redirect/
+                - cell [ref=f2e744]
+              - row [ref=f2e748]:
+                - cell [ref=f2e749]:
+                  - code [ref=f2e750]: tproxy
+                - cell [ref=f2e751]:
+                  - link "TProxy" [ref=f2e752] [cursor=pointer]:
+                    - /url: ./tproxy/
+                - cell [ref=f2e753]
+              - row [ref=f2e757]:
+                - cell [ref=f2e758]:
+                  - code [ref=f2e759]: cloudflared
+                - cell [ref=f2e760]:
+                  - link "Cloudflared" [ref=f2e761] [cursor=pointer]:
+                    - /url: ./cloudflared/
+                - cell [ref=f2e762]
+          - heading "tag" [level=4] [ref=f2e766]
+          - paragraph [ref=f2e767]: The tag of the inbound.
+    - contentinfo [ref=f2e768]:
+      - generic [ref=f2e770]:
+        - generic [ref=f2e771]: Copyright © 2022 nekohasekai
+        - link "github.com" [ref=f2e774] [cursor=pointer]:
+          - /url: https://github.com/SagerNet/sing-box

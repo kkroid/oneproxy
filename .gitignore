@@ -1,0 +1,43 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+oneproxy
+oneproxy-*
+
+# sing-box binary
+bin/sing-box*
+!bin/.gitkeep
+
+# Generated config
+singbox_generated.json
+
+# User config
+config.json
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Go
+*.test
+*.out
+vendor/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
