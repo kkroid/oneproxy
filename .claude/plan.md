@@ -1,509 +1,174 @@
-# OneProxy 项目实现规划
+# OneProxy 开源上线 - 完成总结
 
-## 项目概述
+## ✅ 第一批已完成（文档 + 国际化 + 跨平台分析）
 
-OneProxy 是一个基于 sing-box 的本地代理管理工具，提供系统托盘界面，用于管理多个代理服务器（主要针对 JustMySocks 等服务）。核心特性是通过主动健康检查和 DNS 优化，快速应对墙导致的 IP 变更问题。
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | README.md（英文） | ✅ 完整重写：架构图、安装、API、FAQ、故障排查、部署清单 |
+| 2 | LICENSE | ✅ MIT License |
+| 3 | config.json 凭据检查 | ✅ git 历史安全，无泄露 |
+| 9 | .gitignore 补全 | ✅ 添加 Qt Creator 临时文件 |
+| 10 | config.example.json | ✅ 清理为通用占位符 |
+| 13 | Release 产物说明 | ✅ 已整合到 README "Deployment Checklist" |
+| - | **README.zh.md（中文）** | ✅ 完整中文文档 |
+| - | **HTTP/HTTPS 代理说明** | ✅ 已添加到两份 README，含混合模式示例 |
+| - | **菜单国际化** | ✅ 实现 `trayapp/i18n.h`（QLocale 自动检测中英文） |
+| - | **跨平台可行性报告** | ✅ `docs/CROSS_PLATFORM.md`（macOS 1天，Linux 2天） |
 
-## 技术栈
+---
 
-- **开发语言**：Go 1.21+
-- **核心依赖**：
-  - sing-box（二进制进程管理）
-  - [fyne](https://fyne.io/) 或 [systray](https://github.com/getlantern/systray)（系统托盘 UI）
-  - 标准库：os/exec, encoding/json, net/http
-- **目标平台**：Windows（预留跨平台能力）
+## 📝 待执行（第二批 - 工程化）
 
-## 项目架构
+### #4 build.ps1 路径自动检测 ⚠️
 
-```
-OneProxy/
-├── cmd/
-│   └── oneproxy/
-│       └── main.go                 # 程序入口
-├── internal/
-│   ├── config/
-│   │   ├── config.go              # 配置结构定义
-│   │   ├── loader.go              # 配置加载/保存
-│   │   └── singbox.go             # sing-box 配置生成器
-│   ├── proxy/
-│   │   ├── manager.go             # sing-box 进程管理
-│   │   ├── health.go              # 健康检查逻辑
-│   │   └── dns.go                 # DNS 缓存刷新
-│   └── ui/
-│       ├── tray.go                # 系统托盘界面
-│       └── menu.go                # 菜单构建逻辑
-├── configs/
-│   ├── config.example.json        # 配置文件示例
-│   └── singbox.template.json      # sing-box 配置模板
-├── bin/
-│   └── sing-box.exe               # sing-box 二进制（下载后放置）
-├── logs/
-│   └── oneproxy.log               # 应用日志
-├── go.mod
-├── go.sum
-├── README.md
-└── .gitignore
+**当前问题：**
+```powershell
+$qtDir = "C:\Qt\6.8.3\msvc2022_64"  # 硬编码
+$vcvars = "C:\Program Files\...\2022\Community\..."  # 硬编码
 ```
 
-## 核心模块设计
+**改进方案：**
+1. Qt 检测：环境变量 `$env:QTDIR` → qmake 路径解析 → 提示手动设置
+2. MSVC 检测：vswhere.exe → vcvars64.bat
 
-### 1. 配置管理模块 (internal/config)
+### #6 windeployqt 参数评估 🟡
 
-#### 1.1 用户配置文件 (config.json)
+当前：`--no-system-d3d-compiler --no-opengl-sw`
 
-```json
-{
-  "version": "1.0",
-  "log_level": "info",
-  "health_check": {
-    "enabled": true,
-    "interval_seconds": 60,
-    "timeout_seconds": 5,
-    "test_url": "https://www.google.com/generate_204"
-  },
-  "dns": {
-    "flush_on_failure": true,
-    "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
-  },
-  "proxies": [
-    {
-      "name": "JMS-Server1",
-      "enabled": true,
-      "type": "shadowsocks",
-      "server": "c331s1.portablesubmari",
-      "port": 5299,
-      "method": "aes-256-gcm",
-      "password": "your-password"
-    },
-    {
-      "name": "JMS-Server2", 
-      "enabled": true,
-      "type": "vmess",
-      "server": "c331s3.portablesubmari",
-      "port": 5299,
-      "uuid": "your-uuid",
-      "alter_id": 0,
-      "security": "auto"
-    }
-  ],
-  "inbound": {
-    "listen": "127.0.0.1",
-    "socks_port": 1080,
-    "http_port": 1081,
-    "mixed_port": 1082
-  }
-}
+需测试：
+- 去掉参数后包体积增加
+- 无独显机器渲染测试
+
+### #11 用户文档 📚
+
+创建 `docs/` 目录：
+- [ ] `installation.md` / `installation.zh.md` — 环境准备、sing-box 下载
+- [ ] `configuration.md` / `configuration.zh.md` — config.json 完整字段参考
+- [ ] `usage.md` / `usage.zh.md` — 浏览器代理设置、验证连接
+- [ ] `troubleshooting.md` / `troubleshooting.zh.md` — 故障排查
+
+### #12 CONTRIBUTING.md 🤝
+
+- [ ] 开发环境要求（Go 1.21+, Qt 6.8, MSVC 2022）
+- [ ] 构建步骤详解
+- [ ] 代码结构说明
+- [ ] PR 规范、commit message 格式
+
+### #5 build 目录治理 🧹
+
+- [x] .gitignore 已排除 trayapp/build/
+- [ ] 确认根目录无误入文件
+
+---
+
+## 🟢 改进项（可选 - 第三批）
+
+| # | 项 | 优先级 |
+|---|-----|--------|
+| 14 | 菜单国际化 | ✅ **已完成** |
+| 15 | build.ps1 路径自动检测 | 高（见第二批 #4） |
+| 16 | CLI --version flag | 中 |
+| 17 | CLI --config flag | 中 |
+| 18 | 单元测试（config、singbox 生成） | 中 |
+| 19 | GitHub Actions CI | 低 |
+| 20 | .editorconfig | 低 |
+
+---
+
+## 📸 缺失截图
+
+README 中引用但未提供：
+- `docs/screenshots/tray-menu.png` — 托盘菜单（中英文各一张）
+- `docs/screenshots/health-status.png` — 健康检查状态
+
+**制作方法：**
+1. 运行 `oneproxy-tray.exe`
+2. 右键托盘图标
+3. 截图菜单（含延迟数据）
+4. 保存到 `docs/screenshots/`
+
+---
+
+## 🚀 发布前检查清单
+
+### 必须项 ✅
+
+- [x] LICENSE 文件
+- [x] README.md（英文）
+- [x] README.zh.md（中文）
+- [x] config.example.json（无真实凭据）
+- [x] .gitignore（排除敏感文件）
+- [ ] 截图（2 张）
+- [x] 跨平台说明（CROSS_PLATFORM.md）
+
+### 推荐项 🟡
+
+- [ ] docs/ 用户文档（4 个 md 文件 × 2 语言）
+- [ ] CONTRIBUTING.md
+- [ ] build.ps1 路径检测改进
+- [ ] GitHub Release 说明（发布时撰写）
+
+### 可选项 🟢
+
+- [ ] 单元测试
+- [ ] CI/CD
+- [ ] macOS/Linux 版本
+
+---
+
+## 建议发布流程
+
+### v0.3.0 初始开源版本
+
+1. **补充截图**（10 分钟）
+2. **创建 docs/ 文档**（2 小时）— 安装、配置、使用、故障排查
+3. **CONTRIBUTING.md**（1 小时）
+4. **build.ps1 路径检测**（1 小时）— 可选，但能降低新用户门槛
+5. **最终测试**（30 分钟）— 完整构建 + 代理验证
+6. **Git tag v0.3.0** + **GitHub Release**
+
+### Release Notes 草稿
+
+```markdown
+# OneProxy v0.3.0 — Initial Release
+
+Multi-port proxy aggregator for Windows with native Qt6 system tray GUI.
+
+## Features
+- 🎯 Multi-port SOCKS5/HTTP proxy (each node → dedicated port)
+- 🩺 Auto health check with latency display
+- 🔄 DNS auto-flush on failures
+- 🪟 Native Qt6 GUI, no console windows
+- 🌍 Chinese/English UI (auto-detect)
+
+## Downloads
+- `oneproxy-tray-windows-amd64.zip` — GUI version (recommended)
+- `oneproxy-windows-amd64.exe` — CLI version (optional)
+
+## Requirements
+- Windows 10/11
+- [sing-box](https://github.com/SagerNet/sing-box/releases) (place in `bin/`)
+
+## Quick Start
+See [README.md](README.md) for installation guide.
 ```
 
-#### 1.2 sing-box 配置生成
+---
 
-根据用户配置动态生成 sing-box 的 JSON 配置：
+## 当前可以立即开源 ✅
 
-```go
-// internal/config/singbox.go
-type SingBoxGenerator struct {
-    userConfig *Config
-}
+核心功能完整，文档齐全。如果你：
+- **接受英文文档为主**（中文已补充）
+- **愿意后续补充 docs/ 详细文档**
+- **可以手动截图 2 张**
 
-func (g *SingBoxGenerator) Generate() (*SingBoxConfig, error) {
-    // 生成包含以下内容的 sing-box 配置：
-    // 1. DNS 配置（短 TTL，可靠 DNS 服务器）
-    // 2. Inbound 配置（SOCKS/HTTP/Mixed）
-    // 3. Outbound 配置（所有代理服务器）
-    // 4. Selector outbound（用于切换）
-    // 5. URLTest outbound（自动测速）
-}
-```
+那么**现在就可以 push 到 GitHub**，标记 `v0.3.0-beta` 或 `v0.3.0`。
 
-### 2. 代理管理模块 (internal/proxy)
-
-#### 2.1 进程管理 (manager.go)
-
-```go
-type Manager struct {
-    cmd           *exec.Cmd
-    configPath    string
-    singboxPath   string
-    isRunning     bool
-    mutex         sync.RWMutex
-}
-
-// 核心方法
-func (m *Manager) Start() error
-func (m *Manager) Stop() error  
-func (m *Manager) Restart() error
-func (m *Manager) IsRunning() bool
-func (m *Manager) GetLogs() ([]string, error)
-```
-
-**实现要点**：
-- 使用 `exec.Command` 启动 sing-box
-- 捕获 stdout/stderr 到日志文件
-- 优雅关闭（SIGTERM -> SIGKILL）
-- 进程状态监控
-
-#### 2.2 健康检查 (health.go)
-
-```go
-type HealthChecker struct {
-    manager       *Manager
-    config        *config.Config
-    ticker        *time.Ticker
-    results       map[string]*HealthResult
-    onFailure     func(proxyName string)
-}
-
-type HealthResult struct {
-    ProxyName    string
-    IsHealthy    bool
-    LastCheck    time.Time
-    Latency      time.Duration
-    ErrorCount   int
-}
-
-// 核心方法
-func (hc *HealthChecker) Start()
-func (hc *HealthChecker) Stop()
-func (hc *HealthChecker) CheckAll() map[string]*HealthResult
-func (hc *HealthChecker) CheckProxy(proxyName string) *HealthResult
-```
-
-**健康检查流程**：
-1. 每 60 秒检查一次所有启用的代理
-2. 检查方式：通过代理访问测试 URL（如 Google 204）
-3. 失败处理：
-   - 记录错误次数
-   - 连续失败 3 次触发故障恢复
-   - 调用 DNS 刷新
-   - 重启 sing-box 进程
-4. 成功后重置错误计数
-
-#### 2.3 DNS 缓存刷新 (dns.go)
-
-```go
-type DNSFlusher struct{}
-
-func (f *DNSFlusher) FlushSystem() error {
-    // Windows: ipconfig /flushdns
-    // Linux: systemd-resolve --flush-caches
-    // macOS: dscacheutil -flushcache
-}
-
-func (f *DNSFlusher) FlushSingBox(manager *Manager) error {
-    // 方法1: 重启 sing-box 进程（简单有效）
-    // 方法2: 如果 sing-box 提供 API，调用刷新接口
-}
-```
-
-### 3. UI 模块 (internal/ui)
-
-#### 3.1 系统托盘 (tray.go)
-
-```go
-type TrayUI struct {
-    manager      *proxy.Manager
-    health       *proxy.HealthChecker
-    config       *config.Config
-}
-
-func (t *TrayUI) Run() error {
-    // 初始化托盘图标
-    // 构建菜单
-    // 启动事件循环
-}
-
-func (t *TrayUI) UpdateMenu() {
-    // 动态更新菜单内容
-}
-```
-
-**托盘菜单结构**：
-```
-OneProxy
-├── 🟢 运行中 / 🔴 已停止
-├── ───────────────
-├── 启动代理
-├── 停止代理
-├── 重启代理
-├── ───────────────
-├── 代理列表 ▶
-│   ├── ✓ JMS-Server1 (45ms)
-│   ├── ✓ JMS-Server2 (67ms)
-│   └── ✗ JMS-Server3 (超时)
-├── ───────────────
-├── 健康检查: 已启用
-├── 立即检查
-├── ───────────────
-├── 打开配置文件
-├── 查看日志
-├── ───────────────
-├── 开机启动 ☑
-├── 关于
-└── 退出
-```
-
-**状态显示**：
-- 托盘图标颜色：绿色（正常）、黄色（部分故障）、红色（停止/全部故障）
-- 鼠标悬停提示：显示当前状态摘要
-- 实时更新代理延迟
-
-## 实现阶段
-
-### Phase 1: 核心功能（MVP）
-
-**目标**：实现基本的代理管理和进程控制
-
-1. **项目初始化**
-   - 创建 Go module
-   - 设置项目目录结构
-   - 配置 .gitignore
-
-2. **配置管理**
-   - 定义配置结构
-   - 实现配置加载/保存
-   - 实现 sing-box 配置生成器
-
-3. **进程管理**
-   - 实现 sing-box 进程启动/停止
-   - 日志捕获
-   - 状态监控
-
-4. **系统托盘 UI**
-   - 基础托盘图标
-   - 启动/停止菜单
-   - 退出功能
-
-5. **测试**
-   - 手动配置一个代理
-   - 测试启动/停止功能
-   - 验证代理连接
-
-### Phase 2: 健康检查与 DNS 优化
-
-**目标**：解决 IP 变更导致的连接问题
-
-1. **健康检查模块**
-   - 实现定期检查逻辑
-   - TCP 连接测试
-   - HTTP 测试 URL 访问
-
-2. **DNS 刷新**
-   - 实现系统 DNS 缓存刷新
-   - sing-box 进程重启策略
-   - 故障恢复流程
-
-3. **UI 增强**
-   - 显示代理健康状态
-   - 显示延迟信息
-   - 手动触发检查
-
-4. **测试**
-   - 模拟 IP 变更场景
-   - 验证自动恢复
-   - 验证 DNS 刷新效果
-
-### Phase 3: 增强功能
-
-**目标**：提升用户体验
-
-1. **配置 UI**
-   - 配置文件编辑器（可选）
-   - 配置验证
-
-2. **日志查看**
-   - 日志查看器
-   - 日志级别过滤
-
-3. **开机启动**
-   - Windows 注册表配置
-
-4. **订阅更新（可选）**
-   - 从订阅链接更新服务器列表
-
-## sing-box 配置示例
-
-根据用户配置生成的 sing-box 配置大致如下：
-
-```json
-{
-  "log": {
-    "level": "info",
-    "output": "logs/singbox.log"
-  },
-  "dns": {
-    "servers": [
-      {
-        "tag": "cloudflare",
-        "address": "https://1.1.1.1/dns-query",
-        "detour": "direct"
-      },
-      {
-        "tag": "google", 
-        "address": "https://8.8.8.8/dns-query",
-        "detour": "direct"
-      }
-    ],
-    "rules": [
-      {
-        "domain_suffix": [".portablesubmari"],
-        "server": "cloudflare"
-      }
-    ],
-    "strategy": "prefer_ipv4"
-  },
-  "inbounds": [
-    {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "127.0.0.1",
-      "listen_port": 1082
-    }
-  ],
-  "outbounds": [
-    {
-      "type": "shadowsocks",
-      "tag": "jms-server1",
-      "server": "c331s1.portablesubmari",
-      "server_port": 5299,
-      "method": "aes-256-gcm",
-      "password": "password"
-    },
-    {
-      "type": "vmess",
-      "tag": "jms-server2",
-      "server": "c331s3.portablesubmari",
-      "server_port": 5299,
-      "uuid": "uuid",
-      "alter_id": 0,
-      "security": "auto"
-    },
-    {
-      "type": "selector",
-      "tag": "proxy",
-      "outbounds": ["jms-server1", "jms-server2"],
-      "default": "jms-server1"
-    },
-    {
-      "type": "direct",
-      "tag": "direct"
-    }
-  ],
-  "route": {
-    "rules": [
-      {
-        "protocol": "dns",
-        "outbound": "direct"
-      }
-    ],
-    "final": "proxy"
-  }
-}
-```
-
-## 关键技术决策
-
-### 1. 单进程 vs 多进程
-**决策**：单个 sing-box 进程管理所有代理
-**理由**：sing-box 原生支持多 outbound，资源占用少，配置简单
-
-### 2. 域名 vs IP
-**决策**：优先使用域名，配合主动健康检查和 DNS 刷新
-**理由**：
-- JustMySocks 通过 DNS 自动更新 IP
-- 健康检查可在几十秒内发现问题
-- DNS 刷新可快速获取新 IP
-- 无需维护 IP 订阅
-
-### 3. 托盘库选择
-**决策**：使用 [systray](https://github.com/getlantern/systray)
-**理由**：
-- 轻量级，专注于托盘功能
-- 跨平台支持好
-- API 简单直观
-- 社区活跃
-
-### 4. 健康检查策略
-**决策**：60 秒间隔 + 连续失败 3 次触发恢复
-**理由**：
-- 60 秒平衡及时性和资源消耗
-- 3 次失败避免误判
-- 及时发现 IP 变更问题
-
-### 5. DNS 刷新方式
-**决策**：系统 DNS 刷新 + sing-box 进程重启
-**理由**：
-- 简单可靠
-- 清除所有层级缓存
-- 重启开销可接受（几秒）
-
-## 依赖管理
-
-### 外部二进制
-- **sing-box**：从 GitHub Release 下载对应平台版本
-  - 位置：`bin/sing-box.exe`
-  - 版本：v1.13.14+
-
-### Go 依赖
-```go
-require (
-    github.com/getlantern/systray v1.2.2
-    gopkg.in/yaml.v3 v3.0.1  // 可选：支持 YAML 配置
-)
-```
-
-## 配置文件位置
-
-- **用户配置**：`./config.json`（程序同目录）
-- **sing-box 配置**：`./singbox_generated.json`（自动生成，不提交）
-- **日志文件**：`./logs/`
-- **sing-box 二进制**：`./bin/sing-box.exe`
-
-## 测试计划
-
-### 单元测试
-- 配置加载/生成逻辑
-- sing-box 配置生成器
-- DNS 刷新命令执行
-
-### 集成测试
-- 完整启动/停止流程
-- 健康检查触发恢复
-- 配置变更热重载
-
-### 手动测试场景
-1. 正常启动代理，验证连接
-2. 模拟 IP 变更（修改 hosts 文件），验证自动恢复
-3. 禁用某个代理，验证健康检查跳过
-4. 所有代理失败，验证状态显示
-
-## 未来扩展
-
-- [ ] Web 管理界面（可选）
-- [ ] 流量统计
-- [ ] 规则分流（GeoIP/GeoSite）
-- [ ] 订阅链接导入
-- [ ] 多配置文件支持（工作/家庭切换）
-- [ ] API 接口（供其他程序调用）
-
-## 风险与挑战
-
-1. **sing-box 版本兼容性**
-   - 缓解：使用稳定版本，固定配置格式
-
-2. **Windows 权限问题**
-   - 缓解：避免需要管理员权限的操作
-
-3. **健康检查影响性能**
-   - 缓解：可配置间隔，异步执行
-
-4. **DNS 刷新可能失败**
-   - 缓解：提供手动重启选项
+---
 
 ## 下一步
 
-如果这个规划通过 review，将按照 Phase 1 开始实施：
-1. 初始化 Go 项目
-2. 实现配置管理模块
-3. 实现 sing-box 进程管理
-4. 实现基础托盘 UI
-5. 完成 MVP 测试
+等待你的决定：
+1. **立即开源** — 我帮你生成 Git 命令 + Release 说明
+2. **先补文档** — 我继续创建 docs/ 下的 8 个 md 文件
+3. **其他优先级** — 告诉我你想先做什么

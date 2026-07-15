@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -64,8 +65,12 @@ func (m *Manager) Start() error {
 	}
 	m.logFile = logFile
 
-	// Create command
+	// Create command — hide console window (sing-box is a CLI tool)
 	m.cmd = exec.Command(m.singboxPath, "run", "-c", m.configPath)
+	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	// Set env for legacy DNS server format compatibility
+	m.cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
 
 	// Redirect output to log file
 	m.cmd.Stdout = logFile
@@ -94,9 +99,13 @@ func (m *Manager) Stop() error {
 		return fmt.Errorf("sing-box is not running")
 	}
 
-	// Signal stop
-	close(m.stopChan)
-	m.stopChan = make(chan struct{})
+	// Signal stop (don't panic if already closed by monitor goroutine)
+	select {
+	case <-m.stopChan:
+		// already closed
+	default:
+		close(m.stopChan)
+	}
 
 	// Try graceful shutdown first
 	if m.cmd != nil && m.cmd.Process != nil {

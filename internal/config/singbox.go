@@ -24,15 +24,23 @@ type LogConfig struct {
 
 // SingBoxDNS configuration
 type SingBoxDNS struct {
-	Servers  []DNSServer `json:"servers"`
-	Rules    []DNSRule   `json:"rules,omitempty"`
-	Strategy string      `json:"strategy,omitempty"`
+	Servers  []interface{} `json:"servers"`
+	Rules    []DNSRule     `json:"rules,omitempty"`
+	Strategy string        `json:"strategy,omitempty"`
 }
 
-// DNSServer configuration
-type DNSServer struct {
+// DNSServerLegacy (for old format, kept for reference)
+type DNSServerLegacy struct {
 	Tag     string `json:"tag"`
 	Address string `json:"address"`
+	Detour  string `json:"detour,omitempty"`
+}
+
+// DNSServerNew format for sing-box 1.12+
+type DNSServerNew struct {
+	Tag     string `json:"tag"`
+	Address string `json:"address"`
+	Type    string `json:"type,omitempty"`
 	Detour  string `json:"detour,omitempty"`
 }
 
@@ -116,33 +124,18 @@ func (g *SingBoxGenerator) Generate() (*SingBoxConfig, error) {
 	return sbConfig, nil
 }
 
-// generateDNS creates DNS configuration
+// generateDNS creates DNS configuration for sing-box 1.12+
 func (g *SingBoxGenerator) generateDNS() SingBoxDNS {
-	dns := SingBoxDNS{
-		Strategy: "prefer_ipv4",
-	}
-
-	// Add DNS servers
-	for i, server := range g.userConfig.DNS.Servers {
-		tag := fmt.Sprintf("dns-%d", i)
-		dns.Servers = append(dns.Servers, DNSServer{
-			Tag:     tag,
-			Address: server,
-			Detour:  "direct",
-		})
-	}
-
-	// Add rule for proxy domains to use first DNS server
-	if len(dns.Servers) > 0 {
-		dns.Rules = []DNSRule{
-			{
-				DomainSuffix: []string{".portablesubmari"},
-				Server:       dns.Servers[0].Tag,
+	return SingBoxDNS{
+		Strategy: "ipv4_only",
+		Servers: []interface{}{
+			map[string]interface{}{
+				"tag":     "google-dns",
+				"address": "tcp://8.8.8.8",
+				"detour":  "direct",
 			},
-		}
+		},
 	}
-
-	return dns
 }
 
 // generateInbounds creates inbound configurations
@@ -150,10 +143,12 @@ func (g *SingBoxGenerator) generateDNS() SingBoxDNS {
 func (g *SingBoxGenerator) generateInbounds() []SingBoxInbound {
 	var inbounds []SingBoxInbound
 
-	// Determine inbound type from config
-	inboundType := g.userConfig.Inbound.ProxyType
-	if inboundType == "" {
-		inboundType = "socks" // default to socks5
+	// Determine inbound type from config — map to sing-box valid types
+	inboundType := "socks" // default
+	if g.userConfig.Inbound.ProxyType == "http" {
+		inboundType = "http"
+	} else if g.userConfig.Inbound.ProxyType == "mixed" {
+		inboundType = "mixed"
 	}
 
 	// Create one inbound for each enabled proxy

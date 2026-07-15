@@ -1,0 +1,32 @@
+// i18n.h — Minimal hardcoded i18n for OneProxy tray
+#pragma once
+#include <QString>
+#include <QLocale>
+
+struct Strings {
+    QString running, stopped;
+    QString start, stop, restart;
+    QString check, flushDNS, quit;
+    QString timeout;
+    QString checking, checkingTitle;
+    QString flushing, flushingTitle;
+};
+
+inline Strings getStrings() {
+    bool isChinese = QLocale::system().language() == QLocale::Chinese;
+    return isChinese ? Strings{
+        "🟢 运行中", "🔴 已停止",
+        "启动所有代理", "停止所有代理", "重启所有代理",
+        "立即检查所有节点", "立即刷新 DNS", "退出",
+        "超时",
+        "正在检查所有节点...", "OneProxy",
+        "正在刷新 DNS...", "OneProxy",
+    } : Strings{
+        "🟢 Running", "🔴 Stopped",
+        "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
+        "Check All Nodes", "Flush DNS", "Quit",
+        "timeout",
+        "Checking all nodes...", "OneProxy",
+        "Flushing DNS...", "OneProxy",
+    };
+}

@@ -32,6 +32,11 @@ desktop.ini
 *.swo
 *~
 
+# Qt Creator
+*.user
+*.user.*
+*.autosave
+
 # Go
 *.test
 *.out
@@ -41,3 +46,9 @@ vendor/
 tmp/
 temp/
 *.tmp
+
+# Auto-generated C header
+oneproxy.h
+
+# Tray app build output
+trayapp/build/
