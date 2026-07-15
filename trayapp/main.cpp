@@ -191,6 +191,24 @@ private:
         auto s = getStrings();
         menu->clear();
 
+        // Unified proxy: show the address and active node at the top
+        if (unifiedPort > 0 && running) {
+            int activeLat = 0;
+            for (const auto& p : proxies) {
+                auto px = p.toObject();
+                if (px["name"].toString() == active && px["is_healthy"].toBool()) {
+                    activeLat = px["latency_ms"].toInt();
+                    break;
+                }
+            }
+            QString line = active.isEmpty()
+                ? QString("127.0.0.1:%1 — waiting...").arg(unifiedPort)
+                : QString("127.0.0.1:%1 ◀ %2 %3ms").arg(unifiedPort).arg(active).arg(activeLat);
+            menu->addAction(line)->setEnabled(false);
+            menu->addSeparator();
+        }
+
+        // Node list
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
