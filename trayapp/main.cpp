@@ -118,6 +118,7 @@ public:
     QTimer timer;
 
     OneProxyTray() {
+        tray = new QSystemTrayIcon(this);
         tray->setIcon(icoRed);
         tray->setToolTip("OneProxy");
         tray->show();
@@ -236,9 +237,8 @@ private:
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
-    createTrayWindow();
-    g_tray = (new OneProxyTray)->tray;
 
+    // Load icons and DLL BEFORE constructing the tray (ctor uses both)
     qDebug() << "loading icons...";
     icoGreen  = loadIcon("green.ico");  qDebug() << "  green ok";
     icoYellow = loadIcon("yellow.ico"); qDebug() << "  yellow ok";
@@ -246,6 +246,10 @@ int main(int argc, char *argv[]) {
     if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
     qDebug() << "DLL OK";
     if (!QFile::exists("config.json")) { qCritical() << "no config.json"; return 1; }
+
+    createTrayWindow();
+    auto *t = new OneProxyTray;
+    g_tray = t->tray;
     return app.exec();
 }
 
