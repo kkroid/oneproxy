@@ -93,6 +93,7 @@ type URLTestOutbound struct {
 	Outbounds []string `json:"outbounds"`
 	URL       string   `json:"url,omitempty"`
 	Interval  string   `json:"interval,omitempty"`
+	Tolerance uint     `json:"tolerance,omitempty"`
 }
 
 // SelectorOutbound configuration — manual or auto selection
@@ -242,10 +243,11 @@ func (g *SingBoxGenerator) generateOutbounds() []interface{} {
 			selectorTag = g.userConfig.Unified.Tag
 		}
 
-		// urltest → auto-select lowest latency
+		// urltest → auto-select lowest latency (tolerance=100ms prevents ping-pong)
 		outbounds = append(outbounds, URLTestOutbound{
 			Type: "urltest", Tag: "auto",
 			Outbounds: proxyTags,
+			Tolerance: 100,
 		})
 		// selector → manual override, default = "auto"
 		selTags := append([]string{"auto"}, proxyTags...)
