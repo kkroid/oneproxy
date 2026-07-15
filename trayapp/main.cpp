@@ -58,6 +58,36 @@ QString callFree(char* p) {
     return r;
 }
 
+// ─── Tray base: raw Win32 window for TaskbarCreated ──
+static UINT WM_TASKBARCREATED = 0;
+static UINT WM_TRAYCALLBACK  = 0;
+static QSystemTrayIcon *g_tray = nullptr;
+static HWND g_hwnd = nullptr;
+
+static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_TASKBARCREATED && g_tray) {
+        // Explorer restarted — re-create the tray icon
+        g_tray->hide();
+        g_tray->show();
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void createTrayWindow() {
+    WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
+    WM_TRAYCALLBACK  = RegisterWindowMessageW(L"OneProxyTrayCallback");
+
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = TrayWndProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"OneProxyTrayWindow";
+    RegisterClassExW(&wc);
+
+    g_hwnd = CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
+                              HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
 // ─── Icons ──────────────────────────────────────────
 #include <QPainter>
 #include <QPixmap>
@@ -66,8 +96,7 @@ static QIcon icoGreen, icoYellow, icoRed;
 
 static QString exeDir() {
     wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr, b, MAX_PATH);
-    QString p = QString::fromWCharArray(b);
-    return p.left(p.lastIndexOf('\\'));
+    return QString::fromWCharArray(b).left(QString::fromWCharArray(b).lastIndexOf('\\'));
 }
 
 static QIcon loadIcon(const QString &name) {
@@ -82,22 +111,19 @@ static QIcon loadIcon(const QString &name) {
 }
 
 // ─── Tray ───────────────────────────────────────────
-
 class OneProxyTray : public QObject {
     Q_OBJECT
 public:
-    OneProxyTray(QSystemTrayIcon *t, QTimer *tm, QObject *parent = nullptr) : QObject(parent), tray(t), timer(tm) {
+    QSystemTrayIcon *tray;
+    QTimer timer;
+
+    OneProxyTray() {
         tray->setIcon(icoRed);
         tray->setToolTip("OneProxy");
         tray->show();
-        connect(timer, &QTimer::timeout, this, &OneProxyTray::tick);
-        timer->start(5000);
+        connect(&timer, &QTimer::timeout, this, &OneProxyTray::tick);
+        timer.start(5000);
         QTimer::singleShot(600, this, &OneProxyTray::autoStart);
-
-        // Periodically re-show tray (fixes disappearing icon on taskbar restart)
-        QTimer *keepAlive = new QTimer(this);
-        connect(keepAlive, &QTimer::timeout, this, [this]() { tray->show(); });
-        keepAlive->start(3000);
     }
 
 private:
@@ -121,7 +147,6 @@ private:
         int unifiedPort = obj["unified_port"].toInt();
         auto proxies = obj["proxies"].toArray();
 
-        // Find lowest-latency healthy proxy
         int ok = 0, total = 0, minLat = 999999;
         QString active;
         for (const auto& p : proxies) {
@@ -144,16 +169,6 @@ private:
         auto s = getStrings();
         auto* menu = new QMenu();
 
-        // Unified header row
-        if (unifiedPort > 0 && running) {
-            QString hdr = active.isEmpty() ?
-                s.unifiedLabel.arg(unifiedPort) :
-                s.unifiedLabel.arg(QString(":%1 ▶ %2 (%3ms)").arg(unifiedPort).arg(active).arg(minLat));
-            menu->addAction(hdr)->setEnabled(false);
-            menu->addSeparator();
-        }
-
-        // Proxy list
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
@@ -163,13 +178,13 @@ private:
             int lat = px["latency_ms"].toInt();
             bool isActive = (unifiedPort > 0 && h && name == active);
 
-            QString label = isActive ? QString("  ▶ %1  :%2  %3ms").arg(name, -16).arg(port, 5).arg(lat)
-                         : h        ? QString("    %1  :%2  %3ms").arg(name, -16).arg(port, 5).arg(lat)
-                         :            QString("  ✗ %1  :%2  %3").arg(name, -16).arg(port, 5).arg(s.timeout);
+            QString dot = isActive ? "●" : (h ? "○" : "✗");
+            QString label = h
+                ? QString("  %1 %2  :%3  %4ms").arg(dot).arg(name, -16).arg(port, 5).arg(lat)
+                : QString("  %1 %2  :%3  %4").arg(dot).arg(name, -16).arg(port, 5).arg(s.timeout);
 
             auto* a = menu->addAction(label);
             if (h && unifiedPort > 0 && !isActive) {
-                // Clickable — switch unified to this node
                 connect(a, &QAction::triggered, this, [this, name]() { selectProxy(name); });
             } else {
                 a->setEnabled(false);
@@ -198,8 +213,7 @@ private:
 
     void selectProxy(const QString &name) {
         std::thread([this, name]() {
-            QByteArray ba = name.toUtf8();
-            callFree(pSelect(ba.data()));
+            callFree(pSelect(name.toUtf8().data()));
             QTimer::singleShot(500, this, &OneProxyTray::tick);
         }).detach();
     }
@@ -217,14 +231,14 @@ private:
     void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
     void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
 
-private:
-    QSystemTrayIcon *tray;
-    QTimer *timer;
 };
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    createTrayWindow();
+    g_tray = (new OneProxyTray)->tray;
+
     qDebug() << "loading icons...";
     icoGreen  = loadIcon("green.ico");  qDebug() << "  green ok";
     icoYellow = loadIcon("yellow.ico"); qDebug() << "  yellow ok";
@@ -232,10 +246,6 @@ int main(int argc, char *argv[]) {
     if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
     qDebug() << "DLL OK";
     if (!QFile::exists("config.json")) { qCritical() << "no config.json"; return 1; }
-
-    auto *tray = new QSystemTrayIcon();
-    auto *timer = new QTimer();
-    new OneProxyTray(tray, timer, &app);
     return app.exec();
 }
 
