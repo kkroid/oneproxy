@@ -115,13 +115,22 @@ class OneProxyTray : public QObject {
     Q_OBJECT
 public:
     QSystemTrayIcon *tray;
+    QMenu *menu;
     QTimer timer;
 
     OneProxyTray() {
         tray = new QSystemTrayIcon(this);
+        menu = new QMenu();
+        tray->setContextMenu(menu);
+        // Rebuild the menu only when it's about to be shown, so an open
+        // menu is never torn out from under the user by the refresh timer.
+        connect(menu, &QMenu::aboutToShow, this, &OneProxyTray::rebuildMenu);
+
         tray->setIcon(icoRed);
         tray->setToolTip("OneProxy");
         tray->show();
+
+        // Timer only refreshes the icon/tooltip, never the menu.
         connect(&timer, &QTimer::timeout, this, &OneProxyTray::tick);
         timer.start(5000);
         QTimer::singleShot(600, this, &OneProxyTray::autoStart);
@@ -138,16 +147,18 @@ private:
         });
     }
 
-    void tick() {
+    // Parse status JSON; returns false if unavailable.
+    bool fetchStatus(bool &running, int &unifiedPort, QJsonArray &proxies,
+                     int &ok, int &total, QString &active) {
         auto json = callFree(pStatus());
-        if (json.isEmpty()) return;
+        if (json.isEmpty()) return false;
         auto obj = QJsonDocument::fromJson(json.toUtf8()).object();
-        bool running = obj["running"].toBool();
-        int unifiedPort = obj["unified_port"].toInt();
-        auto proxies = obj["proxies"].toArray();
+        running = obj["running"].toBool();
+        unifiedPort = obj["unified_port"].toInt();
+        proxies = obj["proxies"].toArray();
 
-        int ok = 0, total = 0, minLat = 999999;
-        QString active;
+        ok = 0; total = 0; active.clear();
+        int minLat = 999999;
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
@@ -158,15 +169,27 @@ private:
                 if (lat < minLat) { minLat = lat; active = px["name"].toString(); }
             }
         }
+        return true;
+    }
 
-        // Icon
-        if (!running)      { tray->setIcon(icoRed); tray->setToolTip("OneProxy — stopped"); }
-        else if (ok == total) { tray->setIcon(icoGreen); tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
-        else if (ok > 0)  { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
-        else                { tray->setIcon(icoRed); tray->setToolTip("OneProxy — all down"); }
+    // Called by the 5s timer — only touches the icon/tooltip, never the menu.
+    void tick() {
+        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString active;
+        if (!fetchStatus(running, unifiedPort, proxies, ok, total, active)) return;
+
+        if (!running)         { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — stopped"); }
+        else if (ok == total) { tray->setIcon(icoGreen);  tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
+        else if (ok > 0)      { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
+        else                  { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — all down"); }
+    }
+
+    // Called only on QMenu::aboutToShow — rebuilds items right before display.
+    void rebuildMenu() {
+        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString active;
+        if (!fetchStatus(running, unifiedPort, proxies, ok, total, active)) return;
 
         auto s = getStrings();
-        auto* menu = new QMenu();
+        menu->clear();
 
         for (const auto& p : proxies) {
             auto px = p.toObject();
@@ -205,9 +228,6 @@ private:
         menu->addAction(s.flushDNS, this, &OneProxyTray::doFlush);
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
-
-        delete tray->contextMenu();
-        tray->setContextMenu(menu);
     }
 
     // Run a blocking DLL call off the UI thread, then refresh on the UI thread.
