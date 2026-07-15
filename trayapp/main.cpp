@@ -1,24 +1,17 @@
-// OneProxy Tray — Native C++ Qt6 + Go DLL
-// Build: mkdir build && cd build && cmake .. -G "MinGW Makefiles" && make
+// OneProxy Tray — C++17 Qt6 + Go DLL
+// Build: cmake + nmake with MSVC 2022
 #include <QApplication>
 #include <QSystemTrayIcon>
 #include <QMenu>
-#include <QAction>
-#include <QPainter>
-#include <QPixmap>
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
-#include <QDir>
-#include <QMessageBox>
-#include "i18n.h"
-#include <QColor>
 #include <QDebug>
-#include <QTextStream>
 #include <thread>
 #include <windows.h>
+#include "i18n.h"
 
 // ─── DLL bindings ──────────────────────────────────
 typedef char* (*PFN_Start)(char*);
@@ -27,44 +20,34 @@ typedef char* (*PFN_Restart)();
 typedef char* (*PFN_Status)();
 typedef char* (*PFN_Check)();
 typedef char* (*PFN_Flush)();
-typedef char* (*PFN_Version)();
+typedef char* (*PFN_Select)(char*);
 typedef void  (*PFN_Free)(char*);
 
-static PFN_Start   pStart;
-static PFN_Stop    pStop;
+static PFN_Start  pStart;
+static PFN_Stop   pStop;
 static PFN_Restart pRestart;
-static PFN_Status  pStatus;
-static PFN_Check   pCheck;
-static PFN_Flush   pFlush;
-static PFN_Version pVersion;
-static PFN_Free    pFree;
-
-static HMODULE dll = nullptr;
+static PFN_Status pStatus;
+static PFN_Check  pCheck;
+static PFN_Flush  pFlush;
+static PFN_Select pSelect;
+static PFN_Free   pFree;
 
 bool loadDLL() {
+    static HMODULE dll = nullptr;
     if (dll) return true;
-    // Try exe dir first, then parent dir
     dll = LoadLibraryW(L"oneproxy.dll");
     if (!dll) {
-        wchar_t exe[1024];
-        GetModuleFileNameW(nullptr, exe, 1024);
-        std::wstring path(exe);
-        path = path.substr(0, path.find_last_of(L"\\/"));
-        SetCurrentDirectoryW(path.c_str());
+        wchar_t exe[1024]; GetModuleFileNameW(nullptr, exe, 1024);
+        std::wstring p(exe); p = p.substr(0, p.find_last_of(L"\\/"));
+        SetCurrentDirectoryW(p.c_str());
         dll = LoadLibraryW(L"oneproxy.dll");
     }
-    if (!dll) return false;
-
-    #define LOAD(fn, name) fn = (decltype(fn))GetProcAddress(dll, name)
-    LOAD(pStart,   "OneProxy_Start");
-    LOAD(pStop,    "OneProxy_Stop");
-    LOAD(pRestart, "OneProxy_Restart");
-    LOAD(pStatus,  "OneProxy_Status");
-    LOAD(pCheck,   "OneProxy_HealthCheck");
-    LOAD(pFlush,   "OneProxy_FlushDNS");
-    LOAD(pVersion, "OneProxy_GetVersion");
-    LOAD(pFree,    "OneProxy_FreeString");
-    #undef LOAD
+    if (!dll) { qCritical() << "DLL load failed" << GetLastError(); return false; }
+    #define L(fn,n) fn = (decltype(fn))GetProcAddress(dll, n)
+    L(pStart,"OneProxy_Start"); L(pStop,"OneProxy_Stop"); L(pRestart,"OneProxy_Restart");
+    L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
+    L(pSelect,"OneProxy_SelectProxy"); L(pFree,"OneProxy_FreeString");
+    #undef L
     return true;
 }
 
@@ -75,138 +58,122 @@ QString callFree(char* p) {
     return r;
 }
 
-// ─── Icons (loaded from .ico files next to the exe) ──
-static QIcon icoGreen;
-static QIcon icoYellow;
-static QIcon icoRed;
+// ─── Icons ──────────────────────────────────────────
+#include <QPainter>
+#include <QPixmap>
+#include <QColor>
+static QIcon icoGreen, icoYellow, icoRed;
 
 static QString exeDir() {
-    wchar_t buf[MAX_PATH];
-    GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    QString p = QString::fromWCharArray(buf);
+    wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr, b, MAX_PATH);
+    QString p = QString::fromWCharArray(b);
     return p.left(p.lastIndexOf('\\'));
 }
 
 static QIcon loadIcon(const QString &name) {
-    QString path = exeDir() + "\\" + name;
-    QIcon ic(path);
-    if (ic.isNull()) {
-        // fallback: draw a colored circle so we never crash on missing file
-        QPixmap px(64, 64);
-        px.fill(Qt::transparent);
-        QPainter p(&px);
-        p.setRenderHint(QPainter::Antialiasing);
-        QColor c = name.startsWith("green") ? QColor(0x2E, 0x8B, 0x57)
-                 : name.startsWith("yellow") ? QColor(0xE0, 0xA0, 0x00)
-                 : QColor(0xC0, 0x39, 0x2B);
-        p.setBrush(c);
-        p.setPen(Qt::NoPen);
-        p.drawEllipse(4, 4, 56, 56);
-        p.end();
-        return QIcon(px);
-    }
-    return ic;
+    QIcon ic(exeDir() + "\\" + name);
+    if (!ic.isNull()) return ic;
+    QPixmap px(64,64); px.fill(Qt::transparent);
+    QPainter pr(&px); pr.setRenderHint(QPainter::Antialiasing);
+    QColor c = name.startsWith("green") ? QColor(0x2E,0x8B,0x57)
+             : name.startsWith("yellow") ? QColor(0xE0,0xA0,0x00) : QColor(0xC0,0x39,0x2B);
+    pr.setBrush(c); pr.setPen(Qt::NoPen); pr.drawEllipse(4,4,56,56); pr.end();
+    return QIcon(px);
 }
 
-// ─── Main tray class ─────────────────────────────────
+// ─── Tray ───────────────────────────────────────────
+
 class OneProxyTray : public QObject {
     Q_OBJECT
 public:
-    OneProxyTray() {
-        tray.setIcon(icoRed);
-        tray.setToolTip("OneProxy — 已停止");
-        tray.show();
-
-        connect(&timer, &QTimer::timeout, this, &OneProxyTray::tick);
-        timer.start(5000);
-
-        // auto-start after tray is visible
+    OneProxyTray(QSystemTrayIcon *t, QTimer *tm, QObject *parent = nullptr) : QObject(parent), tray(t), timer(tm) {
+        tray->setIcon(icoRed);
+        tray->setToolTip("OneProxy");
+        tray->show();
+        connect(timer, &QTimer::timeout, this, &OneProxyTray::tick);
+        timer->start(5000);
         QTimer::singleShot(600, this, &OneProxyTray::autoStart);
+
+        // Periodically re-show tray (fixes disappearing icon on taskbar restart)
+        QTimer *keepAlive = new QTimer(this);
+        connect(keepAlive, &QTimer::timeout, this, [this]() { tray->show(); });
+        keepAlive->start(3000);
     }
 
-private Q_SLOTS:
+private:
     void autoStart() {
         auto err = callFree(pStart((char*)"config.json"));
-        if (!err.isEmpty()) {
-            qDebug() << "Start failed:" << err;
-            tick();
-        } else {
+        if (!err.isEmpty()) { qDebug() << "Start failed:" << err; tick(); }
+        else {
             qDebug() << "OneProxy: started";
             QTimer::singleShot(3000, this, [this]() {
-                qDebug() << "Running health check (background)...";
                 std::thread([this]() { callFree(pCheck()); }).detach();
                 QTimer::singleShot(8000, this, &OneProxyTray::tick);
             });
         }
     }
+
     void tick() {
         auto json = callFree(pStatus());
         if (json.isEmpty()) return;
-
-        auto doc = QJsonDocument::fromJson(json.toUtf8());
-        auto obj = doc.object();
+        auto obj = QJsonDocument::fromJson(json.toUtf8()).object();
         bool running = obj["running"].toBool();
-        auto mode = obj["mode"].toString();
-        bool unified = (mode == "unified");
         int unifiedPort = obj["unified_port"].toInt();
         auto proxies = obj["proxies"].toArray();
 
-        int total = 0, ok = 0, lowestLat = 999999;
-        QString activeProxy;
+        // Find lowest-latency healthy proxy
+        int ok = 0, total = 0, minLat = 999999;
+        QString active;
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
-            total++;
+            ++total;
             if (px["is_healthy"].toBool()) {
-                ok++;
+                ++ok;
                 int lat = px["latency_ms"].toInt();
-                if (lat < lowestLat) { lowestLat = lat; activeProxy = px["name"].toString(); }
+                if (lat < minLat) { minLat = lat; active = px["name"].toString(); }
             }
         }
 
-        auto s = getStrings();
-        if (!running) {
-            tray.setIcon(icoRed);
-            tray.setToolTip(QString("OneProxy — %1").arg(s.stopped.mid(2)));
-        } else if (total == 0) {
-            tray.setIcon(icoRed);
-            tray.setToolTip("OneProxy — No proxies");
-        } else if (ok == total) {
-            tray.setIcon(icoGreen);
-            tray.setToolTip(unified ? QString("OneProxy :%1 → %2").arg(unifiedPort).arg(activeProxy)
-                                    : QString("OneProxy %1/%2 ✓").arg(ok).arg(total));
-        } else if (ok > 0) {
-            tray.setIcon(icoYellow);
-            tray.setToolTip(unified ? QString("OneProxy :%1 → %2 (%3/%4)").arg(unifiedPort).arg(activeProxy).arg(ok).arg(total)
-                                    : QString("OneProxy %1/%2").arg(ok).arg(total));
-        } else {
-            tray.setIcon(icoRed);
-            tray.setToolTip(QString("OneProxy — All %1").arg(s.timeout));
-        }
+        // Icon
+        if (!running)      { tray->setIcon(icoRed); tray->setToolTip("OneProxy — stopped"); }
+        else if (ok == total) { tray->setIcon(icoGreen); tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
+        else if (ok > 0)  { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
+        else                { tray->setIcon(icoRed); tray->setToolTip("OneProxy — all down"); }
 
-        // Rebuild menu
+        auto s = getStrings();
         auto* menu = new QMenu();
 
-        // Unified mode header
-        if (unified && running) {
-            auto* a = menu->addAction(QString("Unified :%1 → %2 (%3ms)").arg(unifiedPort).arg(activeProxy).arg(lowestLat));
-            a->setEnabled(false);
+        // Unified header row
+        if (unifiedPort > 0 && running) {
+            QString hdr = active.isEmpty() ?
+                s.unifiedLabel.arg(unifiedPort) :
+                s.unifiedLabel.arg(QString(":%1 ▶ %2 (%3ms)").arg(unifiedPort).arg(active).arg(minLat));
+            menu->addAction(hdr)->setEnabled(false);
             menu->addSeparator();
         }
 
+        // Proxy list
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
             QString name = px["name"].toString();
-            int port = unified ? unifiedPort : px["port"].toInt();
             bool h = px["is_healthy"].toBool();
-            qint64 lat = px["latency_ms"].toInt();
-            QString mark = (unified && h && (name == activeProxy)) ? " ▶" : "";
-            QString label = h
-                ? QString("  ✓%1 %2  :%3  %4ms").arg(mark).arg(name, -16).arg(port, 5).arg(lat)
-                : QString("  ✗ %1  :%2  %3").arg(name, -16).arg(port, 5).arg(s.timeout);
+            int port = px["port"].toInt();
+            int lat = px["latency_ms"].toInt();
+            bool isActive = (unifiedPort > 0 && h && name == active);
+
+            QString label = isActive ? QString("  ▶ %1  :%2  %3ms").arg(name, -16).arg(port, 5).arg(lat)
+                         : h        ? QString("    %1  :%2  %3ms").arg(name, -16).arg(port, 5).arg(lat)
+                         :            QString("  ✗ %1  :%2  %3").arg(name, -16).arg(port, 5).arg(s.timeout);
+
             auto* a = menu->addAction(label);
-            a->setEnabled(false);
+            if (h && unifiedPort > 0 && !isActive) {
+                // Clickable — switch unified to this node
+                connect(a, &QAction::triggered, this, [this, name]() { selectProxy(name); });
+            } else {
+                a->setEnabled(false);
+            }
         }
 
         menu->addSeparator();
@@ -219,92 +186,56 @@ private Q_SLOTS:
         } else {
             menu->addAction(s.start, this, &OneProxyTray::doStart);
         }
-
         menu->addSeparator();
         menu->addAction(s.check, this, &OneProxyTray::doCheck);
         menu->addAction(s.flushDNS, this, &OneProxyTray::doFlush);
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
 
-        auto* old = tray.contextMenu();
-        tray.setContextMenu(menu);
-        delete old;
+        delete tray->contextMenu();
+        tray->setContextMenu(menu);
     }
 
-    void doStart()  { callFree(pStart((char*)"config.json")); tick(); }
-    void doStop()   { callFree(pStop()); tick(); }
-    void doRestart() {
+    void selectProxy(const QString &name) {
+        std::thread([this, name]() {
+            QByteArray ba = name.toUtf8();
+            callFree(pSelect(ba.data()));
+            QTimer::singleShot(500, this, &OneProxyTray::tick);
+        }).detach();
+    }
+
+    void doStart()    { callFree(pStart((char*)"config.json")); tick(); }
+    void doStop()     { callFree(pStop()); tick(); }
+    void doRestart()  {
         callFree(pRestart());
         QTimer::singleShot(3000, this, [this]() {
             std::thread([this]() { callFree(pCheck()); }).detach();
             QTimer::singleShot(8000, this, &OneProxyTray::tick);
         });
     }
-    void doCheck()  {
-        auto s = getStrings();
-        tray.showMessage(s.checkingTitle, s.checking, QSystemTrayIcon::Information, 2000);
-        std::thread([this]() {
-            callFree(pCheck());
-            QTimer::singleShot(0, this, &OneProxyTray::tick);
-        }).detach();
-    }
-    void doFlush()  {
-        auto s = getStrings();
-        tray.showMessage(s.flushingTitle, s.flushing, QSystemTrayIcon::Information, 2000);
-        callFree(pFlush());
-        QTimer::singleShot(2000, this, &OneProxyTray::tick);
-    }
-    void doQuit()   { callFree(pStop()); tray.hide(); QApplication::quit(); }
+    void doCheck()    { std::thread([this]() { callFree(pCheck()); QTimer::singleShot(0, this, &OneProxyTray::tick); }).detach(); }
+    void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
+    void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
 
 private:
-    QSystemTrayIcon tray;
-    QTimer timer;
+    QSystemTrayIcon *tray;
+    QTimer *timer;
 };
 
-// ─── main ────────────────────────────────────────────
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
-
-    // Load icons AFTER QApplication exists
     qDebug() << "loading icons...";
-    icoGreen  = loadIcon("green.ico");
-    qDebug() << "  green ok";
-    icoYellow = loadIcon("yellow.ico");
-    qDebug() << "  yellow ok";
-    icoRed    = loadIcon("red.ico");
-    qDebug() << "  red ok";
+    icoGreen  = loadIcon("green.ico");  qDebug() << "  green ok";
+    icoYellow = loadIcon("yellow.ico"); qDebug() << "  yellow ok";
+    icoRed    = loadIcon("red.ico");    qDebug() << "  red ok";
+    if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
+    qDebug() << "DLL OK";
+    if (!QFile::exists("config.json")) { qCritical() << "no config.json"; return 1; }
 
-    // Write startup log
-    {
-        wchar_t exePath[MAX_PATH];
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        QString exeDir = QString::fromWCharArray(exePath);
-        exeDir = exeDir.left(exeDir.lastIndexOf('\\'));
-        QString logPath = exeDir + "\\oneproxy-tray.log";
-        QFile logFile(logPath);
-        if (logFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream ts(&logFile);
-            ts << "exe: " << QString::fromWCharArray(exePath) << "\n";
-            ts << "dir: " << exeDir << "\n";
-            ts << "cwd: " << QDir::currentPath() << "\n";
-            logFile.close();
-        }
-    }
-
-    if (!loadDLL()) {
-        qCritical() << "Cannot load oneproxy.dll. Current dir:" << QDir::currentPath();
-        return 1;
-    }
-    qDebug() << "DLL loaded OK";
-
-    if (!QFile::exists("config.json")) {
-        qCritical() << "config.json not found in" << QDir::currentPath();
-        return 1;
-    }
-    qDebug() << "config.json found";
-
-    OneProxyTray tray;
+    auto *tray = new QSystemTrayIcon();
+    auto *timer = new QTimer();
+    new OneProxyTray(tray, timer, &app);
     return app.exec();
 }
 

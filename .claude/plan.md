@@ -1,81 +1,108 @@
-# Unified Mode 实现计划
+# Mixed Mode v0.4.0 — 完整设计
 
-## Context
+## 菜单展示
 
-当前 OneProxy 只有 "multi-port" 模式：每个上游代理一个独立 SOCKS5 端口，固定绑定、不切换。这是小众场景。
+### Mixed 模式（unified_port 已配置）
 
-90% 代理用户的场景是"统一出口，自动选最快节点，可手动切换"——即 sing-box 的 `urltest` + `selector` 组合。开源项目应覆盖这个主场景。
+```
+──────────────────────────────────────
+  Unified :1080 ▶ JMS-Server3 (42ms)     ← i18n: "Unified :%1 ▶ %2 (%3ms)"
+──────────────────────────────────────
+  ▶ JMS-Server3    :10803  42ms          ← 点击：切换到该节点
+    JMS-Server1    :10801  89ms          ← 点击：切换到该节点
+    JMS-Server2    :10802  156ms
+    JMS-Server4    :10804  timeout       ← 不可用(disabled)
+    JMS-Server5    :10805  67ms
+    JMS-Server6    :10806  1206ms
+──────────────────────────────────────
+🟢 Running                              ← i18n: s.running
+──────────────────────────────────────
+Stop All Proxies
+Restart All Proxies
+──────────────────────────────────────
+Check All Nodes
+Flush DNS
+──────────────────────────────────────
+Quit
+```
 
-## 改动文件
+### 关键行为
 
-### 1. `internal/config/config.go`
-- `Config` 结构体加 `Mode string`（"multi-port" 默认 / "unified"）
-- `InboundConfig` 加 `Port int`（unified 模式下的统一端口，如 1080）
-- `Validate()`: unified 模式跳过 local_port 唯一性检查
-- `Validate()`: unified 模式要求 `Inbound.Port > 0`
+| 元素 | 行为 |
+|------|------|
+| **Unified 行** | 只读，显示当前活跃节点 + 延迟 |
+| **▶ 节点** | 当前活跃节点，再次点击无操作 |
+| **正常节点** | 可点击，点击后 unified 端口切换到该节点 |
+| **超时节点** | disabled，不可点击 |
 
-### 2. `internal/config/singbox.go`
-- 新增 `URLTestOutbound` 结构体
-- `generateInbounds()`: unified 模式只生成 1 个 inbound（`listen_port` = `cfg.Inbound.Port`）
-- `generateOutbounds()`: unified 模式在所有 proxy outbound 之上叠加：
-  ```json
-  { "type": "urltest", "tag": "auto", "outbounds": ["out-A","out-B",...] },
-  { "type": "selector", "tag": "proxy", "outbounds": ["auto","out-A","out-B",...], "default": "auto" }
-  ```
-- `generateRoute()`: unified 模式 `final = "proxy"`，无 inbound 绑定规则
+## 切换实现
 
-### 3. `configs/config.example.json`
-- 加 unified 模式示例注释
-- 保留 multi-port 作为默认
+sing-box selector 通过 Clash API 控制。需要新增：
 
-### 4. `trayapp/main.cpp`
-- `tick()`: unified 模式下菜单显示格式不同——显示当前选中节点、延迟、可点击切换
-- 有 Selector 时，menu 列出所有节点作为可点击项，当前节点标记 ✓
-- 无 Selector（仅 urltest），显示 auto-choice 的节点
-
-### 5. `cmd/oneproxy-dll/main.go`
-- `Status()` 返回的 JSON 增加 `mode` 字段和 `active_proxy` 字段（当前选中/活跃节点）
-
-### 6. `README.md` + `README.zh.md`
-- "Modes" 章节说明两种模式及使用场景
-
-## sing-box 配置示例（unified 模式）
+### 1. sing-box 配置开启 Clash API
 
 ```json
 {
-  "inbounds": [{
-    "type": "socks", "tag": "in-unified",
-    "listen": "127.0.0.1", "listen_port": 1080
-  }],
-  "outbounds": [
-    {"type": "shadowsocks", "tag": "out-Proxy1", ...},
-    {"type": "vmess", "tag": "out-Proxy2", ...},
-    {"type": "vmess", "tag": "out-Proxy3", ...},
-    {
-      "type": "urltest",
-      "tag": "auto",
-      "outbounds": ["out-Proxy1", "out-Proxy2", "out-Proxy3"],
-      "url": "https://www.google.com/generate_204",
-      "interval": "5m"
-    },
-    {
-      "type": "selector",
-      "tag": "proxy",
-      "outbounds": ["auto", "out-Proxy1", "out-Proxy2", "out-Proxy3"],
-      "default": "auto"
-    },
-    {"type": "direct", "tag": "direct"}
-  ],
-  "route": {
-    "rules": [{"protocol": "dns", "outbound": "direct"}],
-    "final": "proxy"
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "external_ui": ""
+    }
   }
 }
 ```
 
-## 测试
+### 2. DLL 新增 API
 
-1. 配置 `mode: "unified"` → 编译 → 启动
-2. `curl -x socks5://127.0.0.1:1080 https://ip.sb` 应返回延迟最低节点的 IP
-3. 托盘菜单显示当前活跃节点
-4. 健康检查只对 1 个端口做（:1080），但分别测每个上游的延迟
+```c
+char* OneProxy_SelectProxy(char* proxyName);  // PUT /proxies/proxy → {"name":"out-XXX"}
+```
+
+Go 实现：`http.NewRequest("PUT", "http://127.0.0.1:9090/proxies/proxy", body)`
+
+### 3. tray 点击回调
+
+```
+点击某节点 → DLL OneProxy_SelectProxy(name) → sing-box Clash API → 流量立即切到新节点
+```
+
+## 国际化
+
+### i18n.h 新增字段
+
+```cpp
+struct Strings {
+    // ... existing ...
+    QString unifiedLabel;     // "Unified :%1" / "统一出口 :%1"
+    QString unifiedActive;    // "▶ %1 (%2ms)" / already handled by formatting
+};
+```
+
+中英文自动适配：
+- 中文系统：`统一出口 :1080 ▶ Server3 (42ms)`
+- 英文系统：`Unified :1080 ▶ Server3 (42ms)`
+
+## 切换位置
+
+用户在**菜单里直接点节点名**就切换——不需要子菜单、不需要设置页。
+
+```
+右键托盘 → 看到 7 行（1 unified + 6 节点）
+                     ↓
+              点 "JMS-Server1"
+                     ↓
+        unified 端口立即切到 Server1
+                     ↓
+        ▶ 标记移到 Server1 那行
+```
+
+## 实现文件
+
+| 文件 | 改动 |
+|------|------|
+| `config.go` | 删 `Mode`，加 `ClashPort` 字段 |
+| `singbox.go` | 新增 `ClashAPIConfig` 结构体，unified 模式加 clash_api |
+| `oneproxy-dll/main.go` | 新增 `OneProxy_SelectProxy` 导出 |
+| `trayapp/main.cpp` | 菜单节点可点击（unified 模式），调用 SelectProxy |
+| `trayapp/i18n.h` | 新增 unifiedLabel |
+| `configs/config.example.json` | 添加 mixed 模式示例 |

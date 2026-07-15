@@ -11,12 +11,16 @@ import (
 type Config struct {
 	Version     string        `json:"version"`
 	LogLevel    string        `json:"log_level"`
-	Mode        string        `json:"mode,omitempty"`        // "multi-port" (default) or "unified"
-	UnifiedPort int           `json:"unified_port,omitempty"` // single port for unified mode
+	Unified     UnifiedConfig `json:"unified"`
 	HealthCheck HealthCheck   `json:"health_check"`
 	DNS         DNSConfig     `json:"dns"`
 	Proxies     []ProxyConfig `json:"proxies"`
 	Inbound     InboundConfig `json:"inbound"`
+}
+
+type UnifiedConfig struct {
+	Port    int    `json:"port"`    // 0 = disabled, e.g. 1080
+	Tag     string `json:"tag,omitempty"`  // selector tag (default "proxy")
 }
 
 // HealthCheck configuration
@@ -106,12 +110,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one proxy is required")
 	}
 
-	if c.Mode == "" {
-		c.Mode = "multi-port" // default
-	}
-
 	// Validate each proxy
-	portMap := make(map[int]string) // track local port usage (multi-port mode only)
+	portMap := make(map[int]string)
 	for i, proxy := range c.Proxies {
 		if proxy.Name == "" {
 			return fmt.Errorf("proxy #%d: name is required", i)
@@ -126,48 +126,40 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("proxy %s: invalid port %d", proxy.Name, proxy.Port)
 		}
 
-		// local_port validation only for multi-port mode
-		if c.Mode == "multi-port" {
-			if proxy.LocalPort <= 0 || proxy.LocalPort > 65535 {
+		// local_port is optional (0 = no individual port)
+		if proxy.LocalPort > 0 {
+			if proxy.LocalPort > 65535 {
 				return fmt.Errorf("proxy %s: invalid local_port %d", proxy.Name, proxy.LocalPort)
 			}
-			if existingProxy, exists := portMap[proxy.LocalPort]; exists {
-				return fmt.Errorf("proxy %s: local_port %d conflicts with proxy %s", proxy.Name, proxy.LocalPort, existingProxy)
+			if existing, exists := portMap[proxy.LocalPort]; exists {
+				return fmt.Errorf("proxy %s: local_port %d conflicts with proxy %s", proxy.Name, proxy.LocalPort, existing)
 			}
 			portMap[proxy.LocalPort] = proxy.Name
+			// also check against unified port
+			if proxy.LocalPort == c.Unified.Port && c.Unified.Port > 0 {
+				return fmt.Errorf("proxy %s: local_port %d conflicts with unified port", proxy.Name, proxy.LocalPort)
+			}
 		}
 
-		// Type-specific validation
 		switch proxy.Type {
 		case "shadowsocks":
 			if proxy.Method == "" {
-				return fmt.Errorf("proxy %s: method is required for shadowsocks", proxy.Name)
+				return fmt.Errorf("proxy %s: method is required", proxy.Name)
 			}
 			if proxy.Password == "" {
-				return fmt.Errorf("proxy %s: password is required for shadowsocks", proxy.Name)
+				return fmt.Errorf("proxy %s: password is required", proxy.Name)
 			}
 		case "vmess":
 			if proxy.UUID == "" {
-				return fmt.Errorf("proxy %s: uuid is required for vmess", proxy.Name)
+				return fmt.Errorf("proxy %s: uuid is required", proxy.Name)
 			}
 		}
 	}
 
-	// Validate inbound
-	if c.Inbound.Listen == "" {
-		return fmt.Errorf("inbound listen address is required")
-	}
-	if c.Inbound.ProxyType == "" {
-		c.Inbound.ProxyType = "socks5" // default
-	}
-	if c.Inbound.ProxyType != "socks5" && c.Inbound.ProxyType != "http" && c.Inbound.ProxyType != "mixed" {
-		return fmt.Errorf("inbound proxy_type must be socks5, http, or mixed")
-	}
-
-	// unified mode: unified_port is required
-	if c.Mode == "unified" {
-		if c.UnifiedPort <= 0 || c.UnifiedPort > 65535 {
-			return fmt.Errorf("unified_port is required in unified mode")
+	// Unified port validation
+	if c.Unified.Port > 0 && c.Unified.Port <= 65535 {
+		if _, exists := portMap[c.Unified.Port]; exists {
+			return fmt.Errorf("unified port %d conflicts with a proxy local_port", c.Unified.Port)
 		}
 	}
 
