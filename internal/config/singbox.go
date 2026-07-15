@@ -85,6 +85,23 @@ type DirectOutbound struct {
 	Tag  string `json:"tag"`
 }
 
+// URLTestOutbound configuration — auto-select lowest latency node
+type URLTestOutbound struct {
+	Type      string   `json:"type"`
+	Tag       string   `json:"tag"`
+	Outbounds []string `json:"outbounds"`
+	URL       string   `json:"url,omitempty"`
+	Interval  string   `json:"interval,omitempty"`
+}
+
+// SelectorOutbound configuration — manual or auto selection
+type SelectorOutbound struct {
+	Type      string   `json:"type"`
+	Tag       string   `json:"tag"`
+	Outbounds []string `json:"outbounds"`
+	Default   string   `json:"default,omitempty"`
+}
+
 // RouteConfig for routing rules
 type RouteConfig struct {
 	Rules []RouteRule `json:"rules"`
@@ -139,31 +156,37 @@ func (g *SingBoxGenerator) generateDNS() SingBoxDNS {
 }
 
 // generateInbounds creates inbound configurations
-// Each enabled proxy gets its own inbound port
+// multi-port: one inbound per proxy
+// unified: one inbound on the unified_port
 func (g *SingBoxGenerator) generateInbounds() []SingBoxInbound {
 	var inbounds []SingBoxInbound
 
-	// Determine inbound type from config — map to sing-box valid types
-	inboundType := "socks" // default
+	inboundType := "socks"
 	if g.userConfig.Inbound.ProxyType == "http" {
 		inboundType = "http"
 	} else if g.userConfig.Inbound.ProxyType == "mixed" {
 		inboundType = "mixed"
 	}
 
-	// Create one inbound for each enabled proxy
-	enabledProxies := g.userConfig.GetEnabledProxies()
-	for _, proxy := range enabledProxies {
-		inboundTag := fmt.Sprintf("in-%d", proxy.LocalPort)
-
+	if g.userConfig.Mode == "unified" {
 		inbounds = append(inbounds, SingBoxInbound{
 			Type:       inboundType,
-			Tag:        inboundTag,
+			Tag:        "in-unified",
+			Listen:     g.userConfig.Inbound.Listen,
+			ListenPort: g.userConfig.UnifiedPort,
+		})
+		return inbounds
+	}
+
+	// multi-port: one inbound for each enabled proxy
+	for _, proxy := range g.userConfig.GetEnabledProxies() {
+		inbounds = append(inbounds, SingBoxInbound{
+			Type:       inboundType,
+			Tag:        fmt.Sprintf("in-%d", proxy.LocalPort),
 			Listen:     g.userConfig.Inbound.Listen,
 			ListenPort: proxy.LocalPort,
 		})
 	}
-
 	return inbounds
 }
 
@@ -173,68 +196,69 @@ func (g *SingBoxGenerator) generateOutbounds() []interface{} {
 
 	// Add proxy outbounds (one for each enabled proxy)
 	enabledProxies := g.userConfig.GetEnabledProxies()
+	var proxyTags []string
 	for _, proxy := range enabledProxies {
 		outboundTag := fmt.Sprintf("out-%s", g.sanitizeTag(proxy.Name))
+		proxyTags = append(proxyTags, outboundTag)
 
 		switch proxy.Type {
 		case "shadowsocks":
 			outbounds = append(outbounds, ShadowsocksOutbound{
-				Type:       "shadowsocks",
-				Tag:        outboundTag,
-				Server:     proxy.Server,
-				ServerPort: proxy.Port,
-				Method:     proxy.Method,
-				Password:   proxy.Password,
+				Type: "shadowsocks", Tag: outboundTag,
+				Server: proxy.Server, ServerPort: proxy.Port,
+				Method: proxy.Method, Password: proxy.Password,
 			})
-
 		case "vmess":
 			outbounds = append(outbounds, VMessOutbound{
-				Type:       "vmess",
-				Tag:        outboundTag,
-				Server:     proxy.Server,
-				ServerPort: proxy.Port,
-				UUID:       proxy.UUID,
-				AlterID:    proxy.AlterID,
-				Security:   proxy.Security,
+				Type: "vmess", Tag: outboundTag,
+				Server: proxy.Server, ServerPort: proxy.Port,
+				UUID: proxy.UUID, AlterID: proxy.AlterID, Security: proxy.Security,
 			})
 		}
 	}
 
-	// Add direct outbound
-	outbounds = append(outbounds, DirectOutbound{
-		Type: "direct",
-		Tag:  "direct",
-	})
+	if g.userConfig.Mode == "unified" && len(proxyTags) > 0 {
+		// URLTest → auto-select lowest latency
+		outbounds = append(outbounds, URLTestOutbound{
+			Type:      "urltest",
+			Tag:       "auto",
+			Outbounds: proxyTags,
+		})
+		// Selector → manual override with "auto" as default
+		selectorTags := append([]string{"auto"}, proxyTags...)
+		outbounds = append(outbounds, SelectorOutbound{
+			Type:      "selector",
+			Tag:       "proxy",
+			Outbounds: selectorTags,
+			Default:   "auto",
+		})
+	}
 
+	// Direct
+	outbounds = append(outbounds, DirectOutbound{Type: "direct", Tag: "direct"})
 	return outbounds
 }
 
 // generateRoute creates routing configuration
-// Each inbound is bound to its corresponding outbound
+// multi-port: each inbound → its corresponding outbound
+// unified: final = "proxy" (selector), no per-inbound rules
 func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	var rules []RouteRule
 
-	// Create one-to-one binding rules for each proxy
-	enabledProxies := g.userConfig.GetEnabledProxies()
-	for _, proxy := range enabledProxies {
+	if g.userConfig.Mode == "unified" {
+		// DNS through direct, everything else through the selector
+		rules = append(rules, RouteRule{Protocol: "dns", Outbound: "direct"})
+		return RouteConfig{Rules: rules, Final: "proxy"}
+	}
+
+	// multi-port: one-to-one binding
+	for _, proxy := range g.userConfig.GetEnabledProxies() {
 		inboundTag := fmt.Sprintf("in-%d", proxy.LocalPort)
 		outboundTag := fmt.Sprintf("out-%s", g.sanitizeTag(proxy.Name))
-
-		rules = append(rules, RouteRule{
-			Inbound:  []string{inboundTag},
-			Outbound: outboundTag,
-		})
+		rules = append(rules, RouteRule{Inbound: []string{inboundTag}, Outbound: outboundTag})
 	}
-
-	// DNS traffic goes direct
-	rules = append(rules, RouteRule{
-		Protocol: "dns",
-		Outbound: "direct",
-	})
-
-	return RouteConfig{
-		Rules: rules,
-	}
+	rules = append(rules, RouteRule{Protocol: "dns", Outbound: "direct"})
+	return RouteConfig{Rules: rules}
 }
 
 // sanitizeTag creates a valid tag from proxy name

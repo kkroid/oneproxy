@@ -146,14 +146,22 @@ private Q_SLOTS:
         auto doc = QJsonDocument::fromJson(json.toUtf8());
         auto obj = doc.object();
         bool running = obj["running"].toBool();
+        auto mode = obj["mode"].toString();
+        bool unified = (mode == "unified");
+        int unifiedPort = obj["unified_port"].toInt();
         auto proxies = obj["proxies"].toArray();
 
-        int total = 0, ok = 0;
+        int total = 0, ok = 0, lowestLat = 999999;
+        QString activeProxy;
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
             total++;
-            if (px["is_healthy"].toBool()) ok++;
+            if (px["is_healthy"].toBool()) {
+                ok++;
+                int lat = px["latency_ms"].toInt();
+                if (lat < lowestLat) { lowestLat = lat; activeProxy = px["name"].toString(); }
+            }
         }
 
         auto s = getStrings();
@@ -165,27 +173,37 @@ private Q_SLOTS:
             tray.setToolTip("OneProxy — No proxies");
         } else if (ok == total) {
             tray.setIcon(icoGreen);
-            tray.setToolTip(QString("OneProxy %1/%2 ✓").arg(ok).arg(total));
+            tray.setToolTip(unified ? QString("OneProxy :%1 → %2").arg(unifiedPort).arg(activeProxy)
+                                    : QString("OneProxy %1/%2 ✓").arg(ok).arg(total));
         } else if (ok > 0) {
             tray.setIcon(icoYellow);
-            tray.setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total));
+            tray.setToolTip(unified ? QString("OneProxy :%1 → %2 (%3/%4)").arg(unifiedPort).arg(activeProxy).arg(ok).arg(total)
+                                    : QString("OneProxy %1/%2").arg(ok).arg(total));
         } else {
             tray.setIcon(icoRed);
             tray.setToolTip(QString("OneProxy — All %1").arg(s.timeout));
         }
 
-        // Rebuild menu with live data
+        // Rebuild menu
         auto* menu = new QMenu();
+
+        // Unified mode header
+        if (unified && running) {
+            auto* a = menu->addAction(QString("Unified :%1 → %2 (%3ms)").arg(unifiedPort).arg(activeProxy).arg(lowestLat));
+            a->setEnabled(false);
+            menu->addSeparator();
+        }
 
         for (const auto& p : proxies) {
             auto px = p.toObject();
             if (!px["enabled"].toBool()) continue;
             QString name = px["name"].toString();
-            int port = px["port"].toInt();
+            int port = unified ? unifiedPort : px["port"].toInt();
             bool h = px["is_healthy"].toBool();
             qint64 lat = px["latency_ms"].toInt();
+            QString mark = (unified && h && (name == activeProxy)) ? " ▶" : "";
             QString label = h
-                ? QString("  ✓ %1  :%2  %3ms").arg(name, -16).arg(port, 5).arg(lat)
+                ? QString("  ✓%1 %2  :%3  %4ms").arg(mark).arg(name, -16).arg(port, 5).arg(lat)
                 : QString("  ✗ %1  :%2  %3").arg(name, -16).arg(port, 5).arg(s.timeout);
             auto* a = menu->addAction(label);
             a->setEnabled(false);

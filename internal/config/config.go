@@ -11,6 +11,8 @@ import (
 type Config struct {
 	Version     string        `json:"version"`
 	LogLevel    string        `json:"log_level"`
+	Mode        string        `json:"mode,omitempty"`        // "multi-port" (default) or "unified"
+	UnifiedPort int           `json:"unified_port,omitempty"` // single port for unified mode
 	HealthCheck HealthCheck   `json:"health_check"`
 	DNS         DNSConfig     `json:"dns"`
 	Proxies     []ProxyConfig `json:"proxies"`
@@ -104,8 +106,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one proxy is required")
 	}
 
+	if c.Mode == "" {
+		c.Mode = "multi-port" // default
+	}
+
 	// Validate each proxy
-	portMap := make(map[int]string) // track local port usage
+	portMap := make(map[int]string) // track local port usage (multi-port mode only)
 	for i, proxy := range c.Proxies {
 		if proxy.Name == "" {
 			return fmt.Errorf("proxy #%d: name is required", i)
@@ -120,16 +126,16 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("proxy %s: invalid port %d", proxy.Name, proxy.Port)
 		}
 
-		// Validate local port
-		if proxy.LocalPort <= 0 || proxy.LocalPort > 65535 {
-			return fmt.Errorf("proxy %s: invalid local_port %d", proxy.Name, proxy.LocalPort)
+		// local_port validation only for multi-port mode
+		if c.Mode == "multi-port" {
+			if proxy.LocalPort <= 0 || proxy.LocalPort > 65535 {
+				return fmt.Errorf("proxy %s: invalid local_port %d", proxy.Name, proxy.LocalPort)
+			}
+			if existingProxy, exists := portMap[proxy.LocalPort]; exists {
+				return fmt.Errorf("proxy %s: local_port %d conflicts with proxy %s", proxy.Name, proxy.LocalPort, existingProxy)
+			}
+			portMap[proxy.LocalPort] = proxy.Name
 		}
-
-		// Check for duplicate local ports
-		if existingProxy, exists := portMap[proxy.LocalPort]; exists {
-			return fmt.Errorf("proxy %s: local_port %d conflicts with proxy %s", proxy.Name, proxy.LocalPort, existingProxy)
-		}
-		portMap[proxy.LocalPort] = proxy.Name
 
 		// Type-specific validation
 		switch proxy.Type {
@@ -156,6 +162,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Inbound.ProxyType != "socks5" && c.Inbound.ProxyType != "http" && c.Inbound.ProxyType != "mixed" {
 		return fmt.Errorf("inbound proxy_type must be socks5, http, or mixed")
+	}
+
+	// unified mode: unified_port is required
+	if c.Mode == "unified" {
+		if c.UnifiedPort <= 0 || c.UnifiedPort > 65535 {
+			return fmt.Errorf("unified_port is required in unified mode")
+		}
 	}
 
 	return nil
