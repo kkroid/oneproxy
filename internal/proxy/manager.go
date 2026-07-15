@@ -83,9 +83,11 @@ func (m *Manager) Start() error {
 	}
 
 	m.isRunning = true
+	m.stopChan = make(chan struct{}) // fresh channel for this run
 
-	// Monitor process in background
-	go m.monitor()
+	// Monitor process in background — capture cmd/stopChan locally to avoid
+	// racing with Stop() which sets m.cmd = nil.
+	go m.monitor(m.cmd, m.stopChan)
 
 	return nil
 }
@@ -99,41 +101,14 @@ func (m *Manager) Stop() error {
 		return fmt.Errorf("sing-box is not running")
 	}
 
-	// Signal stop (don't panic if already closed by monitor goroutine)
-	select {
-	case <-m.stopChan:
-		// already closed
-	default:
-		close(m.stopChan)
-	}
+	// Signal intentional stop so monitor() won't report an unexpected exit.
+	close(m.stopChan)
 
-	// Try graceful shutdown first
+	// Kill the process. monitor() owns cmd.Wait(); we just terminate it.
 	if m.cmd != nil && m.cmd.Process != nil {
-		if err := m.cmd.Process.Signal(os.Interrupt); err != nil {
-			// If graceful shutdown fails, kill it
-			if killErr := m.cmd.Process.Kill(); killErr != nil {
-				return fmt.Errorf("failed to kill process: %w", killErr)
-			}
-		}
-
-		// Wait for process to exit (with timeout)
-		done := make(chan error, 1)
-		go func() {
-			done <- m.cmd.Wait()
-		}()
-
-		select {
-		case <-done:
-			// Process exited
-		case <-time.After(5 * time.Second):
-			// Timeout, force kill
-			if m.cmd.Process != nil {
-				m.cmd.Process.Kill()
-			}
-		}
+		m.cmd.Process.Kill()
 	}
 
-	// Close log file
 	if m.logFile != nil {
 		m.logFile.Close()
 		m.logFile = nil
@@ -195,29 +170,29 @@ func (m *Manager) GetLogs(lines int) ([]string, error) {
 	return logLines, nil
 }
 
-// monitor watches the sing-box process
-func (m *Manager) monitor() {
-	if m.cmd == nil || m.cmd.Process == nil {
+// monitor watches a specific sing-box process. cmd and stopChan are passed
+// by value from Start() so a later Stop()/Start() cycle can't swap them
+// underneath us.
+func (m *Manager) monitor(cmd *exec.Cmd, stopChan chan struct{}) {
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
 
-	// Wait for process to exit
-	err := m.cmd.Wait()
+	err := cmd.Wait()
 
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	// Check if this was an intentional stop
+	// Was this an intentional stop?
 	select {
-	case <-m.stopChan:
-		// Intentional stop, do nothing
-		return
+	case <-stopChan:
+		return // yes — Stop() killed it
 	default:
-		// Unexpected exit
-		m.isRunning = false
-		if err != nil {
-			fmt.Printf("sing-box process exited unexpectedly: %v\n", err)
-		}
+	}
+
+	// Unexpected exit
+	m.mutex.Lock()
+	m.isRunning = false
+	m.mutex.Unlock()
+	if err != nil {
+		fmt.Printf("sing-box process exited unexpectedly: %v\n", err)
 	}
 }
 

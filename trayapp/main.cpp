@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QDebug>
 #include <thread>
+#include <functional>
 #include <windows.h>
 #include "i18n.h"
 
@@ -58,15 +59,14 @@ QString callFree(char* p) {
     return r;
 }
 
-// ─── Tray base: raw Win32 window for TaskbarCreated ──
+// ─── TaskbarCreated: re-show tray icon after explorer.exe restarts ──
+// Windows broadcasts the registered "TaskbarCreated" message when the shell
+// restarts. A hidden message-only window listens for it and re-adds the icon.
 static UINT WM_TASKBARCREATED = 0;
-static UINT WM_TRAYCALLBACK  = 0;
 static QSystemTrayIcon *g_tray = nullptr;
-static HWND g_hwnd = nullptr;
 
 static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_TASKBARCREATED && g_tray) {
-        // Explorer restarted — re-create the tray icon
         g_tray->hide();
         g_tray->show();
     }
@@ -75,7 +75,6 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 static void createTrayWindow() {
     WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
-    WM_TRAYCALLBACK  = RegisterWindowMessageW(L"OneProxyTrayCallback");
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -84,8 +83,8 @@ static void createTrayWindow() {
     wc.lpszClassName = L"OneProxyTrayWindow";
     RegisterClassExW(&wc);
 
-    g_hwnd = CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
-                              HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
+                    HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 
 // ─── Icons ──────────────────────────────────────────
@@ -96,7 +95,8 @@ static QIcon icoGreen, icoYellow, icoRed;
 
 static QString exeDir() {
     wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr, b, MAX_PATH);
-    return QString::fromWCharArray(b).left(QString::fromWCharArray(b).lastIndexOf('\\'));
+    QString path = QString::fromWCharArray(b);
+    return path.left(path.lastIndexOf('\\'));
 }
 
 static QIcon loadIcon(const QString &name) {
@@ -130,14 +130,12 @@ public:
 private:
     void autoStart() {
         auto err = callFree(pStart((char*)"config.json"));
-        if (!err.isEmpty()) { qDebug() << "Start failed:" << err; tick(); }
-        else {
-            qDebug() << "OneProxy: started";
-            QTimer::singleShot(3000, this, [this]() {
-                std::thread([this]() { callFree(pCheck()); }).detach();
-                QTimer::singleShot(8000, this, &OneProxyTray::tick);
-            });
-        }
+        if (!err.isEmpty()) { qDebug() << "Start failed:" << err; tick(); return; }
+        qDebug() << "OneProxy: started";
+        // Give sing-box 3s to bind, then health-check off-thread and refresh.
+        QTimer::singleShot(3000, this, [this]() {
+            runAsync([]() { callFree(pCheck()); }, 8000);
+        });
     }
 
     void tick() {
@@ -212,11 +210,21 @@ private:
         tray->setContextMenu(menu);
     }
 
-    void selectProxy(const QString &name) {
-        std::thread([this, name]() {
-            callFree(pSelect(name.toUtf8().data()));
-            QTimer::singleShot(500, this, &OneProxyTray::tick);
+    // Run a blocking DLL call off the UI thread, then refresh on the UI thread.
+    // QMetaObject::invokeMethod with QueuedConnection is the safe cross-thread
+    // way to schedule tick() back on the Qt main thread.
+    void runAsync(std::function<void()> work, int refreshDelayMs) {
+        std::thread([this, work, refreshDelayMs]() {
+            work();
+            QMetaObject::invokeMethod(this, [this, refreshDelayMs]() {
+                QTimer::singleShot(refreshDelayMs, this, &OneProxyTray::tick);
+            }, Qt::QueuedConnection);
         }).detach();
+    }
+
+    void selectProxy(const QString &name) {
+        QByteArray raw = name.toUtf8();
+        runAsync([raw]() { callFree(pSelect(const_cast<char*>(raw.constData()))); }, 500);
     }
 
     void doStart()    { callFree(pStart((char*)"config.json")); tick(); }
@@ -224,11 +232,10 @@ private:
     void doRestart()  {
         callFree(pRestart());
         QTimer::singleShot(3000, this, [this]() {
-            std::thread([this]() { callFree(pCheck()); }).detach();
-            QTimer::singleShot(8000, this, &OneProxyTray::tick);
+            runAsync([]() { callFree(pCheck()); }, 8000);
         });
     }
-    void doCheck()    { std::thread([this]() { callFree(pCheck()); QTimer::singleShot(0, this, &OneProxyTray::tick); }).detach(); }
+    void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
     void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
     void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
 

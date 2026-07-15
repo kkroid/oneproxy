@@ -29,6 +29,7 @@ type HealthChecker struct {
 	manager     *Manager
 	results     map[string]*HealthResult
 	resultsMux  sync.RWMutex
+	stateMux    sync.Mutex // guards isRunning, ticker, stopChan
 	ticker      *time.Ticker
 	stopChan    chan struct{}
 	isRunning   bool
@@ -60,28 +61,28 @@ func NewHealthChecker(cfg *config.Config, manager *Manager) *HealthChecker {
 
 // Start begins periodic health checking
 func (hc *HealthChecker) Start() {
-	if hc.isRunning {
-		return
-	}
+	hc.stateMux.Lock()
+	defer hc.stateMux.Unlock()
 
-	if !hc.config.HealthCheck.Enabled {
+	if hc.isRunning || !hc.config.HealthCheck.Enabled {
 		return
 	}
 
 	hc.isRunning = true
+	hc.stopChan = make(chan struct{}) // fresh channel each start
+	stop := hc.stopChan
 	interval := time.Duration(hc.config.HealthCheck.IntervalSeconds) * time.Second
 	hc.ticker = time.NewTicker(interval)
+	ticker := hc.ticker
 
-	// Run initial check immediately
 	go hc.CheckAll()
 
-	// Start periodic checking
 	go func() {
 		for {
 			select {
-			case <-hc.ticker.C:
+			case <-ticker.C:
 				hc.CheckAll()
-			case <-hc.stopChan:
+			case <-stop:
 				return
 			}
 		}
@@ -90,6 +91,9 @@ func (hc *HealthChecker) Start() {
 
 // Stop stops the health checker
 func (hc *HealthChecker) Stop() {
+	hc.stateMux.Lock()
+	defer hc.stateMux.Unlock()
+
 	if !hc.isRunning {
 		return
 	}
@@ -238,5 +242,7 @@ func (hc *HealthChecker) SetFailureCallback(callback func(proxyName string)) {
 
 // IsRunning returns whether the health checker is running
 func (hc *HealthChecker) IsRunning() bool {
+	hc.stateMux.Lock()
+	defer hc.stateMux.Unlock()
 	return hc.isRunning
 }
