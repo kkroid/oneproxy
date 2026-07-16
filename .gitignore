@@ -1,4 +1,8 @@
-# Binaries
+# Runtime binaries we intentionally track:
+# oneproxy.dll, oneproxy-tray.exe, Qt6*.dll, plugins/*, bin/sing-box.exe, *.ico
+# Everything else matching *.exe/*.dll is ignored by patterns below.
+
+# Build artifacts (not tracked)
 *.exe
 *.dll
 *.so
@@ -6,9 +10,45 @@
 oneproxy
 oneproxy-*
 
+# Exceptions — these ARE tracked
+!oneproxy.dll
+!trayapp/build/oneproxy-tray.exe
+!trayapp/build/oneproxy.dll
+!trayapp/build/Qt6Core.dll
+!trayapp/build/Qt6Gui.dll
+!trayapp/build/Qt6Widgets.dll
+!trayapp/build/Qt6Network.dll
+!trayapp/build/Qt6Svg.dll
+!trayapp/build/dxcompiler.dll
+!trayapp/build/dxil.dll
+!trayapp/build/platforms/*.dll
+!trayapp/build/styles/*.dll
+!trayapp/build/imageformats/*.dll
+!trayapp/build/iconengines/*.dll
+!trayapp/build/tls/*.dll
+!trayapp/build/generic/*.dll
+!trayapp/build/networkinformation/*.dll
+!trayapp/build/green.ico
+!trayapp/build/yellow.ico
+!trayapp/build/red.ico
+!bin/sing-box.exe
+
+# CMake build files (not tracked)
+trayapp/build/CMakeFiles/
+trayapp/build/CMakeCache.txt
+trayapp/build/cmake_install.cmake
+trayapp/build/Makefile
+trayapp/build/*_autogen/
+trayapp/build/*.dir/
+trayapp/build/*.obj
+trayapp/build/*.pdb
+trayapp/build/*.ilk
+trayapp/build/*.lib
+trayapp/build/*.exp
+
 # sing-box binary
 bin/sing-box*
-!bin/.gitkeep
+!bin/sing-box.exe
 
 # Generated config
 singbox_generated.json
@@ -50,8 +90,6 @@ temp/
 # Auto-generated C header
 oneproxy.h
 
-# Tray app build output
-trayapp/build/
 .playwright-mcp/
 
 # Installer dist
