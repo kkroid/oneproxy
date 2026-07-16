@@ -23,6 +23,7 @@ jobs:
 
       - name: Build Installer
         run: |
+          copy configs\config.example.json trayapp\build\config.json
           copy trayapp\installer.iss trayapp\build\
           cd trayapp\build
           iscc installer.iss
