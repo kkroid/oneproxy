@@ -101,7 +101,6 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
 
-	baseDir := exeDir()
 	cp := C.GoString(configPath)
 	found, err := resolveConfig(cp)
 	if err != nil { return errStr(err) }
