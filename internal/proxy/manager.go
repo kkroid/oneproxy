@@ -72,6 +72,9 @@ func (m *Manager) Start() error {
 	// Create command — hide console window
 	m.cmd = exec.Command(m.singboxPath, "run", "-c", m.configPath)
 	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// Set cwd to the data directory so sing-box's own log output resolves
+	// to a writable path (e.g., ~/.oneproxy/ instead of C:\Program Files\...)
+	m.cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
 	m.cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
 	m.cmd.Stdout = logFile
 	m.cmd.Stderr = logFile

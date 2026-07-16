@@ -141,8 +141,7 @@ func NewSingBoxGenerator(cfg *Config) *SingBoxGenerator {
 func (g *SingBoxGenerator) Generate() (*SingBoxConfig, error) {
 	sbConfig := &SingBoxConfig{
 		Log: LogConfig{
-			Level:  g.userConfig.LogLevel,
-			Output: "logs/singbox.log",
+			Level: g.userConfig.LogLevel,
 		},
 		DNS:       g.generateDNS(),
 		Inbounds:  g.generateInbounds(),
