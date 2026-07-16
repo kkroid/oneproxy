@@ -10,6 +10,8 @@ struct Strings {
     QString timeout;
     QString unifiedLabel;
     QString autoStart;
+    QString systemProxy;
+    QString routingMode, modeGlobal, modeRule, modeDirect;
 };
 
 inline Strings getStrings() {
@@ -21,6 +23,8 @@ inline Strings getStrings() {
         "超时",
         "统一出口 %1",
         "开机自启",
+        "设为系统代理",
+        "代理模式", "全局", "规则", "直连",
     } : Strings{
         "🟢 Running", "🔴 Stopped",
         "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
@@ -28,5 +32,7 @@ inline Strings getStrings() {
         "timeout",
         "Unified %1",
         "Auto-start on boot",
+        "Set as system proxy",
+        "Routing Mode", "Global", "Rule", "Direct",
     };
 }

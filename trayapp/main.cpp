@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QSystemTrayIcon>
 #include <QMenu>
+#include <QAction>
+#include <QActionGroup>
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -12,6 +14,8 @@
 #include <thread>
 #include <functional>
 #include <windows.h>
+#include <wininet.h>
+#pragma comment(lib, "wininet.lib")
 #include "i18n.h"
 
 // ─── DLL bindings ──────────────────────────────────
@@ -251,6 +255,33 @@ private:
         menu->addAction(s.flushDNS, this, &OneProxyTray::doFlush);
         menu->addSeparator();
 
+        // System proxy toggle
+        QAction *sysProxyAction = menu->addAction(s.systemProxy);
+        sysProxyAction->setCheckable(true);
+        sysProxyAction->setChecked(isSystemProxy());
+        connect(sysProxyAction, &QAction::toggled, this, [this](bool on) { setSystemProxy(on); });
+
+        // Routing mode submenu
+        auto *routeMenu = menu->addMenu(s.routingMode);
+        auto *routeGroup = new QActionGroup(this);
+        routeGroup->setExclusive(true);
+
+        auto *actGlobal = routeMenu->addAction(s.modeGlobal);
+        actGlobal->setCheckable(true); routeGroup->addAction(actGlobal);
+        auto *actRule  = routeMenu->addAction(s.modeRule);
+        actRule->setCheckable(true);  routeGroup->addAction(actRule);
+        auto *actDirect = routeMenu->addAction(s.modeDirect);
+        actDirect->setCheckable(true); routeGroup->addAction(actDirect);
+
+        QString curMode = routingMode();
+        (curMode == "rule" ? actRule : curMode == "direct" ? actDirect : actGlobal)->setChecked(true);
+
+        connect(actGlobal, &QAction::triggered, this, [this]() { setRoutingMode("global"); });
+        connect(actRule,  &QAction::triggered, this, [this]() { setRoutingMode("rule"); });
+        connect(actDirect,&QAction::triggered, this, [this]() { setRoutingMode("direct"); });
+
+        menu->addSeparator();
+
         // Auto-start toggle
         QAction *autoAction = menu->addAction(s.autoStart);
         autoAction->setCheckable(true);
@@ -316,6 +347,65 @@ private:
             RegDeleteValueW(hKey, L"OneProxy");
         }
         RegCloseKey(hKey);
+    }
+
+    static bool isSystemProxy() {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            return false;
+        DWORD val = 0, sz = sizeof(val);
+        RegQueryValueExW(hKey, L"ProxyEnable", nullptr, nullptr, (LPBYTE)&val, &sz);
+        RegCloseKey(hKey);
+        return val != 0;
+    }
+
+    static void setSystemProxy(bool on) {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+            return;
+        if (on) {
+            DWORD en = 1;
+            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
+            auto server = L"socks=127.0.0.1:1080";
+            RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)server, (DWORD)((wcslen(server)+1)*sizeof(wchar_t)));
+            auto override = L"<local>";
+            RegSetValueExW(hKey, L"ProxyOverride", 0, REG_SZ, (BYTE*)override, (DWORD)((wcslen(override)+1)*sizeof(wchar_t)));
+        } else {
+            DWORD en = 0;
+            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
+        }
+        RegCloseKey(hKey);
+        // Notify Windows to pick up the change immediately
+        InternetSetOptionW(nullptr, 39, nullptr, 0);  // INTERNET_OPTION_SETTINGS_CHANGED
+        InternetSetOptionW(nullptr, 37, nullptr, 0);  // INTERNET_OPTION_REFRESH
+    }
+
+    // Current routing mode — persisted in a tiny registry string (no DLL needed)
+    QString routingMode() {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\OneProxy", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            return "global";
+        wchar_t val[32] = {};
+        DWORD sz = sizeof(val);
+        RegQueryValueExW(hKey, L"RouteMode", nullptr, nullptr, (LPBYTE)val, &sz);
+        RegCloseKey(hKey);
+        return QString::fromWCharArray(val).isEmpty() ? "global" : QString::fromWCharArray(val);
+    }
+
+    void setRoutingMode(const QString &m) {
+        HKEY hKey;
+        RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\OneProxy", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr);
+        auto s = m.toStdWString();
+        RegSetValueExW(hKey, L"RouteMode", 0, REG_SZ, (BYTE*)s.c_str(), (DWORD)((s.size()+1)*sizeof(wchar_t)));
+        RegCloseKey(hKey);
+        // Restart to apply new route
+        if (tray) {  // bit of delay: stop → restart
+            callFree(pStop());
+            QTimer::singleShot(500, this, [this]() { doStart(); });
+        }
     }
 
 };

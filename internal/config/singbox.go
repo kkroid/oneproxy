@@ -116,8 +116,17 @@ type ClashAPIConfig struct {
 
 // RouteConfig for routing rules
 type RouteConfig struct {
-	Rules []RouteRule `json:"rules"`
-	Final string      `json:"final,omitempty"`
+	Rules    []RouteRule        `json:"rules"`
+	Final    string             `json:"final,omitempty"`
+	RuleSet  []RuleSetEntry     `json:"rule_set,omitempty"`
+}
+
+// RuleSetEntry defines a named rule set (local file type)
+type RuleSetEntry struct {
+	Type   string      `json:"type"`
+	Tag    string      `json:"tag"`
+	Format string      `json:"format"`
+	Path   string      `json:"path"`
 }
 
 // RouteRule for routing
@@ -125,6 +134,7 @@ type RouteRule struct {
 	Inbound  []string `json:"inbound,omitempty"`
 	Protocol string   `json:"protocol,omitempty"`
 	Outbound string   `json:"outbound"`
+	RuleSet  []string `json:"rule_set,omitempty"`
 }
 
 // SingBoxGenerator generates sing-box configuration from user config
@@ -283,7 +293,25 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	}
 
 	rules = append(rules, RouteRule{Protocol: "dns", Outbound: "direct"})
-	return RouteConfig{Rules: rules}
+
+	// Routing mode — global / rule / direct
+	rc := RouteConfig{Rules: rules}
+	switch g.userConfig.RouteMode {
+	case "direct":
+		rc.Final = "direct"
+	case "rule":
+		rc.Final = "proxy"
+		rc.RuleSet = []RuleSetEntry{
+			{Type: "local", Tag: "geoip-cn",  Format: "binary", Path: "geoip.db"},
+			{Type: "local", Tag: "geosite-cn", Format: "binary", Path: "geosite.db"},
+		}
+		rc.Rules = append(rc.Rules,
+			RouteRule{RuleSet: []string{"geoip-cn"},  Outbound: "direct"},
+			RouteRule{RuleSet: []string{"geosite-cn"}, Outbound: "direct"})
+	default: // "global" or empty
+		rc.Final = "proxy"
+	}
+	return rc
 }
 
 // sanitizeTag creates a valid tag from proxy name

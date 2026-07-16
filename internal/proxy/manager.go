@@ -34,6 +34,11 @@ func NewManagerWithLog(singboxPath, configPath, logPath string) *Manager {
 	}
 }
 
+// NewManager creates a simple manager with the default log path.
+func NewManager(singboxPath, configPath string) *Manager {
+	return NewManagerWithLog(singboxPath, configPath, "logs/singbox.log")
+}
+
 // Start starts the sing-box process
 func (m *Manager) Start() error {
 	m.mutex.Lock()

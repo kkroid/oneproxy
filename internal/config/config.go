@@ -12,6 +12,7 @@ type Config struct {
 	Version     string        `json:"version"`
 	LogLevel    string        `json:"log_level"`
 	Unified     UnifiedConfig `json:"unified"`
+	RouteMode   string        `json:"route_mode,omitempty"`   // "global" (default), "rule", "direct"
 	HealthCheck HealthCheck   `json:"health_check"`
 	DNS         DNSConfig     `json:"dns"`
 	Proxies     []ProxyConfig `json:"proxies"`

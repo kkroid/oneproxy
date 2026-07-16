@@ -16,6 +16,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows/registry"
+
 	"github.com/kkroid/oneproxy/internal/config"
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
@@ -29,6 +31,12 @@ var (
 )
 
 // ---- helpers ----
+
+func copyFile(src, dst string) {
+	if data, err := os.ReadFile(src); err == nil {
+		os.WriteFile(dst, data, 0644)
+	}
+}
 
 func errStr(err error) *C.char {
 	if err == nil { return nil }
@@ -107,10 +115,30 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	cfg, err := config.Load(found)
 	if err != nil { return errStr(err) }
+
+	// Routing mode override from registry (set by tray menu)
+	if key, err := registry.OpenKey(registry.CURRENT_USER, `Software\OneProxy`, registry.QUERY_VALUE); err == nil {
+		if v, _, err := key.GetStringValue("RouteMode"); err == nil && v != "" {
+			cfg.RouteMode = v
+		}
+		key.Close()
+	}
+
 	gConfig = cfg
 
 	dataDir := resolveDataDir()
 	genCfg := filepath.Join(dataDir, "singbox_generated.json")
+
+	// Copy geoip/geosite to data dir so sing-box can find them
+	// (sing-box cwd = dataDir, and the config uses relative paths)
+	for _, db := range []string{"geoip.db", "geosite.db"} {
+		src := filepath.Join(ed, "bin", db)
+		dst := filepath.Join(dataDir, db)
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			copyFile(src, dst)
+		}
+	}
+
 	gen := config.NewSingBoxGenerator(cfg)
 	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
 
