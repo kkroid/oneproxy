@@ -56,8 +56,8 @@ Source: "red.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; sing-box proxy core
 Source: "bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Default config (only if user doesn't have one)
-Source: "config.json"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
+; Default config — write to user profile, not Program Files (writable without admin)
+Source: "config.json"; DestDir: "{userprofile}\.oneproxy"; Flags: ignoreversion onlyifdoesntexist
 
 ; Create empty logs dir
 [Dirs]
