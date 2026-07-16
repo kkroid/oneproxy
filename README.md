@@ -200,6 +200,35 @@ Set different types per proxy in `config.json`:
 - Some applications (e.g., Telegram) only support SOCKS5
 - Performance: SOCKS5 is slightly faster (simpler protocol)
 
+### Routing Modes
+
+OneProxy supports three routing modes, selectable from the tray menu:
+
+| Mode | Behavior |
+|------|----------|
+| **Global** | All traffic goes through the proxy (default) |
+| **Rule** | China IPs/domains → direct, everything else → proxy |
+| **Direct** | All traffic goes directly, proxy bypassed |
+
+Rule mode uses sing-box's built-in `rule_set` router with community-maintained databases:
+
+| Database | Size | Purpose |
+|----------|------|---------|
+| `geoip.db` | 4 MB | IP address → country mapping |
+| `geosite.db` | 3.5 MB | Domain → category mapping (cn, ads, etc.) |
+
+These databases are maintained by the [SagerNet community](https://github.com/SagerNet/sing-geoip/releases) and can be updated independently by replacing the files in `bin/`. They are automatically copied to `~/.oneproxy/` on startup.
+
+**Rule mode decision flow:**
+```
+Request to www.google.com  → geosite check → NOT "cn" → routed through proxy
+Request to www.baidu.com   → geosite check → IS "cn"   → direct connection
+Request to 119.29.29.29     → geoip check  → IS "cn"   → direct connection
+Request to 8.8.8.8          → geoip check  → NOT "cn"  → routed through proxy
+```
+
+This is **server-side routing** — it affects all traffic passing through the proxy, not just browser traffic. Unlike PAC scripts which work at the browser level, sing-box routing works for any application using the proxy.
+
 ### Tray Menu Actions
 
 | Action | Effect |
