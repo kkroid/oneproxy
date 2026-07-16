@@ -1,11 +1,12 @@
 # OneProxy Build — MSVC 2022 + Qt6 + Go DLL
-param([switch]$Clean)
+param([switch]$Clean, [switch]$Installer)
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $buildDir = "$root\trayapp\build"
 $qtDir = "C:\Qt\6.8.3\msvc2022_64"
 $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+$innoSetup = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 
 function Clear-BuildDir {
     if (Test-Path $buildDir) {

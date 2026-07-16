@@ -53,3 +53,6 @@ oneproxy.h
 # Tray app build output
 trayapp/build/
 .playwright-mcp/
+
+# Installer dist
+dist/
