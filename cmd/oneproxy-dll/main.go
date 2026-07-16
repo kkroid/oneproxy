@@ -55,12 +55,58 @@ func resolveDataDir() string {
 	return dir
 }
 
+// exeDir returns the directory containing the host executable. In production
+// this is the tray EXE's directory (which also contains config.json and the
+// DLL), making it the right anchor for resolving relative asset paths.
+func exeDir() string {
+	exe, err := os.Executable()
+	if err == nil {
+		return filepath.Dir(exe)
+	}
+	// Fallback — shouldn't happen on any real Windows system
+	dir, _ := filepath.Abs(".")
+	return dir
+}
+
+// resolveConfig finds config.json in: 1) directly if absolute, 2) cwd,
+// 3) exe/dll directory (production), 4) ~/.oneproxy/ (installed fallback).
+func resolveConfig(configPath string) (string, error) {
+	if filepath.IsAbs(configPath) {
+		if _, err := os.Stat(configPath); err == nil {
+			return configPath, nil
+		}
+	}
+
+	// Build candidates: cwd, exe dir, user data dir
+	cwd, _ := filepath.Abs(".")
+	candidates := []string{
+		filepath.Join(cwd, configPath),
+		filepath.Join(exeDir(), configPath),
+		filepath.Join(resolveDataDir(), configPath),
+	}
+	for _, p := range candidates {
+		p, _ = filepath.Abs(p)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"config not found (tried cwd=%s, exe=%s, data=%s)",
+		cwd, exeDir(), resolveDataDir(),
+	)
+}
+
 //export OneProxy_Start
 func OneProxy_Start(configPath *C.char) *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
 
-	cfg, err := config.Load(C.GoString(configPath))
+	baseDir := exeDir()
+	cp := C.GoString(configPath)
+	found, err := resolveConfig(cp)
+	if err != nil { return errStr(err) }
+
+	cfg, err := config.Load(found)
 	if err != nil { return errStr(err) }
 	gConfig = cfg
 
@@ -69,10 +115,14 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	gen := config.NewSingBoxGenerator(cfg)
 	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
 
-	// sing-box binary lives next to the DLL/EXE, not in dataDir
-	ab, _ := filepath.Abs("bin/sing-box.exe")
+	// sing-box binary — try cwd/bin/ first, then exe dir/bin/
+	cwd, _ := filepath.Abs(".")
+	ab := filepath.Join(cwd, "bin", "sing-box.exe")
 	if _, err := os.Stat(ab); os.IsNotExist(err) {
-		return errStr(fmt.Errorf("sing-box.exe not found"))
+		ab = filepath.Join(exeDir(), "bin", "sing-box.exe")
+		if _, err := os.Stat(ab); os.IsNotExist(err) {
+			return errStr(fmt.Errorf("sing-box.exe not found"))
+		}
 	}
 
 	manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
