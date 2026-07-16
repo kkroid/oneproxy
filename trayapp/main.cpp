@@ -139,7 +139,12 @@ public:
 private:
     void autoStart() {
         auto err = callFree(pStart((char*)"config.json"));
-        if (!err.isEmpty()) { qDebug() << "Start failed:" << err; tick(); return; }
+        if (!err.isEmpty()) {
+            qDebug() << "Start failed:" << err;
+            tray->showMessage("OneProxy", "Start failed: " + err, QSystemTrayIcon::Critical, 5000);
+            tick();
+            return;
+        }
         qDebug() << "OneProxy: started";
         // Give sing-box 3s to bind, then health-check off-thread and refresh.
         QTimer::singleShot(3000, this, [this]() {
@@ -245,6 +250,14 @@ private:
         menu->addAction(s.check, this, &OneProxyTray::doCheck);
         menu->addAction(s.flushDNS, this, &OneProxyTray::doFlush);
         menu->addSeparator();
+
+        // Auto-start toggle
+        QAction *autoAction = menu->addAction(s.autoStart);
+        autoAction->setCheckable(true);
+        autoAction->setChecked(isAutoStart());
+        connect(autoAction, &QAction::toggled, this, [this](bool on) { setAutoStart(on); });
+
+        menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
     }
 
@@ -276,6 +289,34 @@ private:
     void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
     void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
     void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
+
+    static bool isAutoStart() {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            return false;
+        wchar_t val[1024] = {};
+        DWORD sz = sizeof(val);
+        auto r = RegQueryValueExW(hKey, L"OneProxy", nullptr, nullptr, (LPBYTE)val, &sz);
+        RegCloseKey(hKey);
+        return r == ERROR_SUCCESS;
+    }
+
+    static void setAutoStart(bool on) {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+            return;
+        if (on) {
+            wchar_t exe[MAX_PATH];
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            RegSetValueExW(hKey, L"OneProxy", 0, REG_SZ, (BYTE*)exe,
+                           (DWORD)((wcslen(exe) + 1) * sizeof(wchar_t)));
+        } else {
+            RegDeleteValueW(hKey, L"OneProxy");
+        }
+        RegCloseKey(hKey);
+    }
 
 };
 

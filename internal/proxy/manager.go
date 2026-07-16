@@ -13,14 +13,14 @@ import (
 
 // Manager manages the sing-box process
 type Manager struct {
-	cmd          *exec.Cmd
-	configPath   string
-	singboxPath  string
-	logPath      string
-	isRunning    bool
-	mutex        sync.RWMutex
-	stopChan     chan struct{}
-	logFile      *os.File
+	cmd         *exec.Cmd
+	configPath  string
+	singboxPath string
+	logPath     string
+	isRunning   bool
+	mutex       sync.RWMutex
+	stopChan    chan struct{}
+	logFile     *os.File
 }
 
 // NewManager creates a new proxy manager
@@ -58,6 +58,9 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 
+	// Rotate logs older than 5 days
+	rotateLogs(logDir)
+
 	// Open log file
 	logFile, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -65,30 +68,21 @@ func (m *Manager) Start() error {
 	}
 	m.logFile = logFile
 
-	// Create command — hide console window (sing-box is a CLI tool)
+	// Create command — hide console window
 	m.cmd = exec.Command(m.singboxPath, "run", "-c", m.configPath)
 	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	// Set env for legacy DNS server format compatibility
 	m.cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
-
-	// Redirect output to log file
 	m.cmd.Stdout = logFile
 	m.cmd.Stderr = logFile
 
-	// Start process
 	if err := m.cmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("failed to start sing-box: %w", err)
 	}
 
 	m.isRunning = true
-	m.stopChan = make(chan struct{}) // fresh channel for this run
-
-	// Monitor process in background — capture cmd/stopChan locally to avoid
-	// racing with Stop() which sets m.cmd = nil.
+	m.stopChan = make(chan struct{})
 	go m.monitor(m.cmd, m.stopChan)
-
 	return nil
 }
 
@@ -101,10 +95,8 @@ func (m *Manager) Stop() error {
 		return fmt.Errorf("sing-box is not running")
 	}
 
-	// Signal intentional stop so monitor() won't report an unexpected exit.
 	close(m.stopChan)
 
-	// Kill the process. monitor() owns cmd.Wait(); we just terminate it.
 	if m.cmd != nil && m.cmd.Process != nil {
 		m.cmd.Process.Kill()
 	}
@@ -116,7 +108,6 @@ func (m *Manager) Stop() error {
 
 	m.isRunning = false
 	m.cmd = nil
-
 	return nil
 }
 
@@ -125,14 +116,10 @@ func (m *Manager) Restart() error {
 	if err := m.Stop(); err != nil && m.IsRunning() {
 		return fmt.Errorf("failed to stop: %w", err)
 	}
-
-	// Wait a moment before restarting
 	time.Sleep(500 * time.Millisecond)
-
 	if err := m.Start(); err != nil {
 		return fmt.Errorf("failed to start: %w", err)
 	}
-
 	return nil
 }
 
@@ -153,47 +140,16 @@ func (m *Manager) GetLogs(lines int) ([]string, error) {
 
 	var logLines []string
 	scanner := bufio.NewScanner(file)
-
 	for scanner.Scan() {
 		logLines = append(logLines, scanner.Text())
 	}
-
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("failed to read log file: %w", err)
 	}
-
-	// Return last N lines
 	if len(logLines) > lines {
 		return logLines[len(logLines)-lines:], nil
 	}
-
 	return logLines, nil
-}
-
-// monitor watches a specific sing-box process. cmd and stopChan are passed
-// by value from Start() so a later Stop()/Start() cycle can't swap them
-// underneath us.
-func (m *Manager) monitor(cmd *exec.Cmd, stopChan chan struct{}) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-
-	err := cmd.Wait()
-
-	// Was this an intentional stop?
-	select {
-	case <-stopChan:
-		return // yes — Stop() killed it
-	default:
-	}
-
-	// Unexpected exit
-	m.mutex.Lock()
-	m.isRunning = false
-	m.mutex.Unlock()
-	if err != nil {
-		fmt.Printf("sing-box process exited unexpectedly: %v\n", err)
-	}
 }
 
 // SetConfigPath updates the config path
@@ -207,9 +163,92 @@ func (m *Manager) SetConfigPath(path string) {
 func (m *Manager) GetPID() int {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-
 	if m.cmd != nil && m.cmd.Process != nil {
 		return m.cmd.Process.Pid
 	}
 	return 0
+}
+
+// rotateLogs deletes log files older than 5 days.
+func rotateLogs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-120 * time.Hour)
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".log" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// monitor watches the sing-box process. On unexpected exit, it retries
+// up to 3 times with 5-second backoff before giving up.
+func (m *Manager) monitor(cmd *exec.Cmd, stopChan chan struct{}) {
+	const maxRetries = 3
+	for retry := 0; retry < maxRetries; retry++ {
+		if cmd == nil || cmd.Process == nil {
+			return
+		}
+		err := cmd.Wait()
+
+		select {
+		case <-stopChan:
+			return // intentional stop
+		default:
+		}
+
+		if retry < maxRetries-1 {
+			time.Sleep(5 * time.Second)
+
+			m.mutex.Lock()
+			if !m.isRunning {
+				m.mutex.Unlock()
+				return
+			}
+
+			logFile, lfErr := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if lfErr != nil {
+				m.isRunning = false
+				m.mutex.Unlock()
+				fmt.Fprintf(os.Stderr, "sing-box retry %d failed: %v\n", retry+1, lfErr)
+				return
+			}
+			if m.logFile != nil { m.logFile.Close() }
+			m.logFile = logFile
+
+			cmd = exec.Command(m.singboxPath, "run", "-c", m.configPath)
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+			m.cmd = cmd
+			m.stopChan = make(chan struct{})
+			stopChan = m.stopChan
+			m.mutex.Unlock()
+
+			if err := cmd.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "sing-box retry %d failed: %v\n", retry+1, err)
+				continue
+			}
+			fmt.Printf("sing-box auto-restarted (attempt %d/%d)\n", retry+1, maxRetries)
+			continue
+		}
+		// exhausted retries
+		m.mutex.Lock()
+		m.isRunning = false
+		m.mutex.Unlock()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sing-box exited after %d retries: %v\n", maxRetries, err)
+		}
+		return
+	}
 }

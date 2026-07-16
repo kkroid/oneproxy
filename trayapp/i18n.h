@@ -9,6 +9,7 @@ struct Strings {
     QString check, flushDNS, quit;
     QString timeout;
     QString unifiedLabel;
+    QString autoStart;
 };
 
 inline Strings getStrings() {
@@ -19,11 +20,13 @@ inline Strings getStrings() {
         "立即检查所有节点", "立即刷新 DNS", "退出",
         "超时",
         "统一出口 %1",
+        "开机自启",
     } : Strings{
         "🟢 Running", "🔴 Stopped",
         "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
         "Check All Nodes", "Flush DNS", "Quit",
         "timeout",
         "Unified %1",
+        "Auto-start on boot",
     };
 }

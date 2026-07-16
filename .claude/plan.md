@@ -1,108 +1,47 @@
-# Mixed Mode v0.4.0 — 完整设计
+# 长期使用完善计划
 
-## 菜单展示
+## 实现列表
 
-### Mixed 模式（unified_port 已配置）
+| # | 功能 | 改动文件 | 方式 |
+|---|------|----------|------|
+| 1 | 开机自启 | `trayapp/main.cpp` | HKCU Run 注册表项，菜单 toggle |
+| 2 | 崩溃自动重连 | `internal/proxy/manager.go` | monitor() 检测异常退出后自动 restart，最多 3 次，每次间隔 5s |
+| 4 | 端口冲突弹通知 | `trayapp/main.cpp` | autoStart() 中 pStart 失败的 err 包含 "bind"/"address" 时弹出 `showMessage` |
+| 5 | 日志轮转(5天) | `internal/proxy/manager.go` | Start() 时扫描 `logs/*.log`，删除 mtime 超过 5 天的 |
+| 7 | 配置错误弹通知 | `trayapp/main.cpp` | autoStart() 中 pStart 失败的 err 总是弹出 `showMessage` |
+| 8 | 菜单开机自启开关 | `trayapp/main.cpp` + `i18n.h` | i18n 加 autoStart 文本，rebuildMenu() 加 toggle action |
 
-```
-──────────────────────────────────────
-  Unified :1080 ▶ JMS-Server3 (42ms)     ← i18n: "Unified :%1 ▶ %2 (%3ms)"
-──────────────────────────────────────
-  ▶ JMS-Server3    :10803  42ms          ← 点击：切换到该节点
-    JMS-Server1    :10801  89ms          ← 点击：切换到该节点
-    JMS-Server2    :10802  156ms
-    JMS-Server4    :10804  timeout       ← 不可用(disabled)
-    JMS-Server5    :10805  67ms
-    JMS-Server6    :10806  1206ms
-──────────────────────────────────────
-🟢 Running                              ← i18n: s.running
-──────────────────────────────────────
-Stop All Proxies
-Restart All Proxies
-──────────────────────────────────────
-Check All Nodes
-Flush DNS
-──────────────────────────────────────
-Quit
-```
+## 实现细节
 
-### 关键行为
+### 1. 开机自启
+- 注册表路径: `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
+- 键名: `OneProxy`
+- 值: tray exe 完整路径
+- `isAutoStart()` — 检查键是否存在
+- `setAutoStart(bool)` — 写入/删除注册表键
+- 菜单项显示为 toggle（选中状态 = 已启用自启）
 
-| 元素 | 行为 |
-|------|------|
-| **Unified 行** | 只读，显示当前活跃节点 + 延迟 |
-| **▶ 节点** | 当前活跃节点，再次点击无操作 |
-| **正常节点** | 可点击，点击后 unified 端口切换到该节点 |
-| **超时节点** | disabled，不可点击 |
+### 2. 崩溃自动重连
+- manager.go: `monitor()` 检测到非主动退出时，不设置 `m.isRunning = false`
+- 改为尝试 `m.Start()` 最多 3 次，每次间隔 5 秒
+- 超过 3 次才放弃
 
-## 切换实现
+### 4/7 端口冲突 + 配置错误通知
+- tray `autoStart()` 中，err 非空时统一调用 `tray->showMessage("Error", err, Critical)`
+- DLL 的 Start 返回的错误文本自然包含 "bind: Only one usage of each socket address" 等有用信息
 
-sing-box selector 通过 Clash API 控制。需要新增：
+### 5. 日志轮转
+- manager.go Start() 时，filepath.Glob("logs/*.log") + os.Stat 查 mtime
+- >120h 则 os.Remove
 
-### 1. sing-box 配置开启 Clash API
+### 8. 菜单开机自启开关
+- i18n.h 加 `autoStart` 字段: 中文"开机自启" / 英文 "Auto-start on boot"
+- rebuildMenu() 中添加 toggle action
 
-```json
-{
-  "experimental": {
-    "clash_api": {
-      "external_controller": "127.0.0.1:9090",
-      "external_ui": ""
-    }
-  }
-}
-```
+## 验证
 
-### 2. DLL 新增 API
-
-```c
-char* OneProxy_SelectProxy(char* proxyName);  // PUT /proxies/proxy → {"name":"out-XXX"}
-```
-
-Go 实现：`http.NewRequest("PUT", "http://127.0.0.1:9090/proxies/proxy", body)`
-
-### 3. tray 点击回调
-
-```
-点击某节点 → DLL OneProxy_SelectProxy(name) → sing-box Clash API → 流量立即切到新节点
-```
-
-## 国际化
-
-### i18n.h 新增字段
-
-```cpp
-struct Strings {
-    // ... existing ...
-    QString unifiedLabel;     // "Unified :%1" / "统一出口 :%1"
-    QString unifiedActive;    // "▶ %1 (%2ms)" / already handled by formatting
-};
-```
-
-中英文自动适配：
-- 中文系统：`统一出口 :1080 ▶ Server3 (42ms)`
-- 英文系统：`Unified :1080 ▶ Server3 (42ms)`
-
-## 切换位置
-
-用户在**菜单里直接点节点名**就切换——不需要子菜单、不需要设置页。
-
-```
-右键托盘 → 看到 7 行（1 unified + 6 节点）
-                     ↓
-              点 "JMS-Server1"
-                     ↓
-        unified 端口立即切到 Server1
-                     ↓
-        ▶ 标记移到 Server1 那行
-```
-
-## 实现文件
-
-| 文件 | 改动 |
-|------|------|
-| `config.go` | 删 `Mode`，加 `ClashPort` 字段 |
-| `singbox.go` | 新增 `ClashAPIConfig` 结构体，unified 模式加 clash_api |
-| `oneproxy-dll/main.go` | 新增 `OneProxy_SelectProxy` 导出 |
-| `trayapp/main.cpp` | 菜单节点可点击（unified 模式），调用 SelectProxy |
-| `trayapp/i18n.h` | 新增 unifiedLabel |
-| `configs/config.example.json` | 添加 mixed 模式示例 |
+1. 构建 DLL + tray
+2. Start → 等 5s → taskkill sing-box → 观察是否自动重启
+3. 重启 Windows → 看是否自动启动
+4. 生成 6 天前的 log 文件 → Start → 观察是否被删除
+5. 把 sing-box 端口改成冲突 → Start → 观察通知
