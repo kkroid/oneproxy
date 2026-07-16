@@ -116,16 +116,19 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	// sing-box binary — try cwd/bin/ first, then exe dir/bin/
 	cwd, _ := filepath.Abs(".")
-	ab := filepath.Join(cwd, "bin", "sing-box.exe")
-	if _, err := os.Stat(ab); os.IsNotExist(err) {
-		ab = filepath.Join(exeDir(), "bin", "sing-box.exe")
-		if _, err := os.Stat(ab); os.IsNotExist(err) {
-			return errStr(fmt.Errorf("sing-box.exe not found"))
+	ed := exeDir()
+	for _, dir := range []string{cwd, ed} {
+		ab := filepath.Join(dir, "bin", "sing-box.exe")
+		ab, _ = filepath.Abs(ab)
+		if _, err := os.Stat(ab); err == nil {
+			manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
+			gManager = manager
+			goto started
 		}
 	}
+	return errStr(fmt.Errorf("sing-box.exe not found (cwd=%s, exe=%s)", cwd, ed))
 
-	manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
-	gManager = manager
+started:
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
 	gDNSFlusher = proxy.NewDNSFlusher()
 
