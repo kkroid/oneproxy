@@ -37,6 +37,19 @@ func errStr(err error) *C.char {
 
 // ---- exports ----
 
+// resolveDataDir returns ~/.oneproxy/ and creates it if needed.
+// All runtime data (generated config, logs) lives here so the app works
+// when installed into a read-only directory like C:\Program Files.
+func resolveDataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	dir := filepath.Join(home, ".oneproxy")
+	os.MkdirAll(dir, 0755)
+	return dir
+}
+
 //export OneProxy_Start
 func OneProxy_Start(configPath *C.char) *C.char {
 	gMu.Lock()
@@ -46,17 +59,20 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	if err != nil { return errStr(err) }
 	gConfig = cfg
 
+	dataDir := resolveDataDir()
+	genCfg := filepath.Join(dataDir, "singbox_generated.json")
 	gen := config.NewSingBoxGenerator(cfg)
-	if err := gen.SaveToFile("singbox_generated.json"); err != nil { return errStr(err) }
+	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
 
-	if _, err := os.Stat("bin/sing-box.exe"); os.IsNotExist(err) {
+	// sing-box binary lives next to the DLL/EXE, not in dataDir
+	ac, _ := filepath.Abs(genCfg)
+	ab, _ := filepath.Abs("bin/sing-box.exe")
+	if _, err := os.Stat(ab); os.IsNotExist(err) {
 		return errStr(fmt.Errorf("sing-box.exe not found in bin/"))
 	}
 
-	ac, _ := filepath.Abs("singbox_generated.json")
-	ab, _ := filepath.Abs("bin/sing-box.exe")
-
-	gManager = proxy.NewManager(ab, ac)
+	manager := proxy.NewManagerWithLog(ab, ac, filepath.Join(dataDir, "logs", "singbox.log"))
+	gManager = manager
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
 	gDNSFlusher = proxy.NewDNSFlusher()
 

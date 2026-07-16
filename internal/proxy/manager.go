@@ -23,12 +23,13 @@ type Manager struct {
 	logFile     *os.File
 }
 
-// NewManager creates a new proxy manager
-func NewManager(singboxPath, configPath string) *Manager {
+// NewManagerWithLog is like NewManager but accepts a custom log path.
+// Use this when the default logs/singbox.log is not writable (e.g. installed dir).
+func NewManagerWithLog(singboxPath, configPath, logPath string) *Manager {
 	return &Manager{
 		configPath:  configPath,
 		singboxPath: singboxPath,
-		logPath:     "logs/singbox.log",
+		logPath:     logPath,
 		stopChan:    make(chan struct{}),
 	}
 }
