@@ -6,6 +6,7 @@ package main
 import "C"
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -261,6 +262,38 @@ func sanitizeTag(name string) string {
 		}
 	}
 	return b.String()
+}
+
+//export OneProxy_ExportConfig
+func OneProxy_ExportConfig() *C.char {
+	// Use the same resolution order as Start: cwd → exeDir → dataDir
+	path, err := resolveConfig("config.json")
+	if err != nil {
+		return errStr(fmt.Errorf("cannot find config: %w", err))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return errStr(fmt.Errorf("cannot read config: %w", err))
+	}
+	return C.CString(base64.StdEncoding.EncodeToString(data))
+}
+
+//export OneProxy_ImportConfig
+func OneProxy_ImportConfig(b64 *C.char) *C.char {
+	raw, err := base64.StdEncoding.DecodeString(C.GoString(b64))
+	if err != nil {
+		return errStr(fmt.Errorf("invalid base64: %w", err))
+	}
+	var tmp interface{}
+	if err := json.Unmarshal(raw, &tmp); err != nil {
+		return errStr(fmt.Errorf("invalid JSON: %w", err))
+	}
+	// Always write to the user-writable data dir
+	path := filepath.Join(resolveDataDir(), "config.json")
+	if err := os.WriteFile(path, raw, 0644); err != nil {
+		return errStr(fmt.Errorf("cannot write config: %w", err))
+	}
+	return nil
 }
 
 //export OneProxy_SelectProxy

@@ -13,6 +13,7 @@ struct Strings {
     QString systemProxy;
     QString routingMode, modeGlobal, modeRule, modeDirect;
     QString openConfig;
+    QString exportConfig, importConfig;
 };
 
 inline Strings getStrings() {
@@ -27,6 +28,7 @@ inline Strings getStrings() {
         "设为系统代理",
         "代理模式", "全局", "规则", "直连",
         "打开配置文件",
+        "导出配置...", "导入配置...",
     } : Strings{
         "🟢 Running", "🔴 Stopped",
         "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
@@ -37,5 +39,6 @@ inline Strings getStrings() {
         "Set as system proxy",
         "Routing Mode", "Global", "Rule", "Direct",
         "Open Config File",
+        "Export Config...", "Import Config...",
     };
 }

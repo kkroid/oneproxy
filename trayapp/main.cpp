@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QFile>
 #include <QDir>
+#include <QFileDialog>
 #include <QDebug>
 #include <thread>
 #include <functional>
@@ -27,6 +28,8 @@ typedef char* (*PFN_Status)();
 typedef char* (*PFN_Check)();
 typedef char* (*PFN_Flush)();
 typedef char* (*PFN_Select)(char*);
+typedef char* (*PFN_Export)();
+typedef char* (*PFN_Import)(char*);
 typedef void  (*PFN_Free)(char*);
 
 static PFN_Start  pStart;
@@ -36,6 +39,8 @@ static PFN_Status pStatus;
 static PFN_Check  pCheck;
 static PFN_Flush  pFlush;
 static PFN_Select pSelect;
+static PFN_Export pExport;
+static PFN_Import pImport;
 static PFN_Free   pFree;
 
 bool loadDLL() {
@@ -52,7 +57,7 @@ bool loadDLL() {
     #define L(fn,n) fn = (decltype(fn))GetProcAddress(dll, n)
     L(pStart,"OneProxy_Start"); L(pStop,"OneProxy_Stop"); L(pRestart,"OneProxy_Restart");
     L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
-    L(pSelect,"OneProxy_SelectProxy"); L(pFree,"OneProxy_FreeString");
+    L(pSelect,"OneProxy_SelectProxy"); L(pExport,"OneProxy_ExportConfig"); L(pImport,"OneProxy_ImportConfig"); L(pFree,"OneProxy_FreeString");
     #undef L
     return true;
 }
@@ -291,6 +296,8 @@ private:
 
         menu->addSeparator();
         menu->addAction(s.openConfig, this, [this]() { doOpenConfig(); });
+        menu->addAction(s.exportConfig, this, &OneProxyTray::doExportConfig);
+        menu->addAction(s.importConfig, this, &OneProxyTray::doImportConfig);
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
     }
@@ -325,7 +332,6 @@ private:
     void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
 
     void doOpenConfig() {
-        // Prefer the user-writable copy in ~/.oneproxy/, fall back to installer
         QString path = QDir::homePath() + "/.oneproxy/config.json";
         if (!QFile::exists(path)) {
             path = QDir::currentPath() + "/config.json";
@@ -336,6 +342,35 @@ private:
                           (L"\"" + path.toStdWString() + L"\"").c_str(),
                           nullptr, SW_SHOW);
         }
+    }
+
+    void doExportConfig() {
+        QString path = QFileDialog::getSaveFileName(nullptr, "Export Config",
+            QDir::homePath() + "/oneproxy-config.json", "JSON (*.json)");
+        if (path.isEmpty()) return;
+        auto b64 = callFree(pExport());
+        if (b64.isEmpty()) { tray->showMessage("OneProxy", "Export failed", QSystemTrayIcon::Critical, 3000); return; }
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            f.write(b64.toUtf8()); f.close();
+            tray->showMessage("OneProxy", "Config exported", QSystemTrayIcon::Information, 2000);
+        }
+    }
+
+    void doImportConfig() {
+        QString path = QFileDialog::getOpenFileName(nullptr, "Import Config",
+            QDir::homePath(), "JSON (*.json)");
+        if (path.isEmpty()) return;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+        auto b64 = QString::fromUtf8(f.readAll()).trimmed(); f.close();
+        auto err = callFree(pImport((char*)b64.toUtf8().constData()));
+        if (!err.isEmpty()) {
+            tray->showMessage("OneProxy", "Import failed: " + err, QSystemTrayIcon::Critical, 5000);
+            return;
+        }
+        tray->showMessage("OneProxy", "Config imported, restarting...", QSystemTrayIcon::Information, 2000);
+        QTimer::singleShot(1000, this, [this]() { doRestart(); });
     }
 
     static bool isAutoStart() {
