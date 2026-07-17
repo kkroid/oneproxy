@@ -130,7 +130,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	genCfg := filepath.Join(dataDir, "singbox_generated.json")
 
 	// Copy geoip/geosite to data dir so sing-box can find them
-	// (sing-box cwd = dataDir, and the config uses relative paths)
+	ed := exeDir()
 	for _, db := range []string{"geoip.db", "geosite.db"} {
 		src := filepath.Join(ed, "bin", db)
 		dst := filepath.Join(dataDir, db)
@@ -144,7 +144,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	// sing-box binary — try cwd/bin/ first, then exe dir/bin/
 	cwd, _ := filepath.Abs(".")
-	ed := exeDir()
+	
 	for _, dir := range []string{cwd, ed} {
 		ab := filepath.Join(dir, "bin", "sing-box.exe")
 		ab, _ = filepath.Abs(ab)

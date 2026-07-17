@@ -57,7 +57,7 @@ Source: "red.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Default config — write to user profile, not Program Files (writable without admin)
-Source: "config.json"; DestDir: "{userprofile}\.oneproxy"; Flags: ignoreversion onlyifdoesntexist
+Source: "config.json"; DestDir: "{%USERPROFILE}\.oneproxy"; Flags: ignoreversion onlyifdoesntexist
 
 ; Create empty logs dir
 [Dirs]
