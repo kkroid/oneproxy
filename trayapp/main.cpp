@@ -193,9 +193,10 @@ private:
         if (!fetchStatus(running, unifiedPort, proxies, ok, total, active)) return;
 
         if (!running)         { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — stopped"); }
+        else if (total == 0)  { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — no proxies"); }
         else if (ok == total) { tray->setIcon(icoGreen);  tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
         else if (ok > 0)      { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
-        else                  { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — all down"); }
+        else                  { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1 proxies, checking...").arg(total)); }
     }
 
     // Called only on QMenu::aboutToShow — rebuilds items right before display.
