@@ -13,6 +13,7 @@ type Config struct {
 	LogLevel    string        `json:"log_level"`
 	Unified     UnifiedConfig `json:"unified"`
 	RouteMode   string        `json:"route_mode,omitempty"`   // "global" (default), "rule", "direct"
+	ProxySites  []string      `json:"proxy_sites,omitempty"`  // domains always routed through proxy in rule mode
 	HealthCheck HealthCheck   `json:"health_check"`
 	DNS         DNSConfig     `json:"dns"`
 	Proxies     []ProxyConfig `json:"proxies"`
@@ -176,4 +177,36 @@ func (c *Config) GetEnabledProxies() []ProxyConfig {
 		}
 	}
 	return enabled
+}
+
+// DefaultProxySites returns the built-in list of domains that should always
+// go through proxy in rule mode. Users can override via config.proxy_sites.
+func DefaultProxySites() []string {
+	return []string{
+		// GitHub
+		"github.com", "github.io", "githubassets.com", "githubusercontent.com",
+		"githubapp.com", "githubuniverse.com", "thegithubshop.com",
+		"githubstatus.com", "githubnext.com", "ghcr.io", "github.dev",
+		"github.blog", "github.net", "githubcopilot.com", "githubpreview.dev",
+		"github.training", "githubinsights.com", "githubresearch.com",
+		"github.inc", "github.co",
+		// LinkedIn
+		"linkedin.com", "licdn.com", "lnkd.in",
+		"linkedin.at", "linkedin.cn", "linkedin.co",
+		"linkedin.de", "linkedin.fr", "linkedin.it", "linkedin.nl",
+		"linkedin.se", "linkedin.in", "linkedin.jp", "linkedin.es",
+		"linkedin.ch", "linkedin.ru", "linkedin.cz", "linkedin.dk",
+		"linkedin.fi", "linkedin.gr", "linkedin.hu", "linkedin.ie",
+		"linkedin.no", "linkedin.pl", "linkedin.pt", "linkedin.ro",
+		"linkedin.tw", "linkedin.hk", "linkedin.my", "linkedin.ph",
+		"bizographics.com", "slideshare.net", "lynda.com",
+	}
+}
+
+// GetProxySites returns the effective proxy sites list (user config or default).
+func (c *Config) GetProxySites() []string {
+	if len(c.ProxySites) > 0 {
+		return c.ProxySites
+	}
+	return DefaultProxySites()
 }

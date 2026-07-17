@@ -328,7 +328,7 @@ func OneProxy_SelectProxy(proxyName *C.char) *C.char {
 }
 
 //export OneProxy_GetVersion
-func OneProxy_GetVersion() *C.char { return C.CString("0.4.0") }
+func OneProxy_GetVersion() *C.char { return C.CString("0.5.0") }
 
 //export OneProxy_FreeString
 func OneProxy_FreeString(s *C.char) { C.free(unsafe.Pointer(s)) }

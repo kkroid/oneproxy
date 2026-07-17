@@ -138,10 +138,12 @@ type HeadlessRule struct {
 
 // RouteRule for routing
 type RouteRule struct {
-	Inbound  []string `json:"inbound,omitempty"`
-	Protocol string   `json:"protocol,omitempty"`
-	Outbound string   `json:"outbound"`
-	RuleSet  []string `json:"rule_set,omitempty"`
+	Inbound       []string `json:"inbound,omitempty"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Outbound      string   `json:"outbound"`
+	RuleSet       []string `json:"rule_set,omitempty"`
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`
+	DomainKeyword []string `json:"domain_keyword,omitempty"`
 }
 
 // SingBoxGenerator generates sing-box configuration from user config
@@ -282,7 +284,7 @@ func (g *SingBoxGenerator) generateOutbounds() []interface{} {
 func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	var rules []RouteRule
 
-	// Individual port bindings
+	// Individual port bindings — force specific proxy per port
 	for _, proxy := range g.userConfig.GetEnabledProxies() {
 		if proxy.LocalPort <= 0 {
 			continue
@@ -290,15 +292,6 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 		inTag := fmt.Sprintf("in-%d", proxy.LocalPort)
 		outTag := fmt.Sprintf("out-%s", g.sanitizeTag(proxy.Name))
 		rules = append(rules, RouteRule{Inbound: []string{inTag}, Outbound: outTag})
-	}
-
-	// Unified port → selector
-	if g.userConfig.Unified.Port > 0 {
-		selectorTag := "proxy"
-		if g.userConfig.Unified.Tag != "" {
-			selectorTag = g.userConfig.Unified.Tag
-		}
-		rules = append(rules, RouteRule{Inbound: []string{"in-unified"}, Outbound: selectorTag})
 	}
 
 	rules = append(rules, RouteRule{Protocol: "dns", Outbound: "direct"})
@@ -309,15 +302,37 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	case "direct":
 		rc.Final = "direct"
 	case "rule":
-		rc.Final = "proxy"
+		// Geoip + geosite rule-sets (binary .srs)
 		rc.RuleSet = []RuleSetEntry{
-			{Type: "local", Tag: "geoip-cn",  Format: "source", Path: filepath.Join(g.baseDir, "bin", "geoip-cn.json")},
-			{Type: "local", Tag: "geosite-cn", Format: "source", Path: filepath.Join(g.baseDir, "bin", "geosite-cn.json")},
+			{Type: "local", Tag: "geoip-cn",   Format: "binary", Path: filepath.Join(g.baseDir, "bin", "geoip-cn.srs")},
+			{Type: "local", Tag: "geosite-cn", Format: "binary", Path: filepath.Join(g.baseDir, "bin", "geosite-cn.srs")},
+		}
+		// User proxy sites → inline domain rules (standard sing-box approach)
+		if sites := g.userConfig.GetProxySites(); len(sites) > 0 {
+			rc.Rules = append(rc.Rules,
+				RouteRule{DomainSuffix: sites, Outbound: "proxy"})
 		}
 		rc.Rules = append(rc.Rules,
-			RouteRule{RuleSet: []string{"geoip-cn"},  Outbound: "direct"},
+			RouteRule{RuleSet: []string{"geoip-cn"},   Outbound: "direct"},
 			RouteRule{RuleSet: []string{"geosite-cn"}, Outbound: "direct"})
+		// Unified port → selector (catch-all for non-China traffic)
+		if g.userConfig.Unified.Port > 0 {
+			selectorTag := "proxy"
+			if g.userConfig.Unified.Tag != "" {
+				selectorTag = g.userConfig.Unified.Tag
+			}
+			rc.Rules = append(rc.Rules, RouteRule{Inbound: []string{"in-unified"}, Outbound: selectorTag})
+		}
+		rc.Final = "proxy"
 	default: // "global" or empty
+		// Unified port → selector (all traffic through proxy)
+		if g.userConfig.Unified.Port > 0 {
+			selectorTag := "proxy"
+			if g.userConfig.Unified.Tag != "" {
+				selectorTag = g.userConfig.Unified.Tag
+			}
+			rc.Rules = append(rc.Rules, RouteRule{Inbound: []string{"in-unified"}, Outbound: selectorTag})
+		}
 		rc.Final = "proxy"
 	}
 	return rc
