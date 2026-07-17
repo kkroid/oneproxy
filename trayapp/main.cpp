@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QDir>
 #include <QDebug>
 #include <thread>
 #include <functional>
@@ -289,6 +290,8 @@ private:
         connect(autoAction, &QAction::toggled, this, [this](bool on) { setAutoStart(on); });
 
         menu->addSeparator();
+        menu->addAction(s.openConfig, this, [this]() { doOpenConfig(); });
+        menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
     }
 
@@ -320,6 +323,20 @@ private:
     void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
     void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
     void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
+
+    void doOpenConfig() {
+        // Prefer the user-writable copy in ~/.oneproxy/, fall back to installer
+        QString path = QDir::homePath() + "/.oneproxy/config.json";
+        if (!QFile::exists(path)) {
+            path = QDir::currentPath() + "/config.json";
+            if (!QFile::exists(path)) path = "";
+        }
+        if (!path.isEmpty()) {
+            ShellExecuteW(nullptr, L"open", L"notepad.exe",
+                          (L"\"" + path.toStdWString() + L"\"").c_str(),
+                          nullptr, SW_SHOW);
+        }
+    }
 
     static bool isAutoStart() {
         HKEY hKey;

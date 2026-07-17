@@ -12,6 +12,7 @@ struct Strings {
     QString autoStart;
     QString systemProxy;
     QString routingMode, modeGlobal, modeRule, modeDirect;
+    QString openConfig;
 };
 
 inline Strings getStrings() {
@@ -25,6 +26,7 @@ inline Strings getStrings() {
         "开机自启",
         "设为系统代理",
         "代理模式", "全局", "规则", "直连",
+        "打开配置文件",
     } : Strings{
         "🟢 Running", "🔴 Stopped",
         "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
@@ -34,5 +36,6 @@ inline Strings getStrings() {
         "Auto-start on boot",
         "Set as system proxy",
         "Routing Mode", "Global", "Rule", "Direct",
+        "Open Config File",
     };
 }
