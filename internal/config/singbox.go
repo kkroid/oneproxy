@@ -121,20 +121,29 @@ type RouteConfig struct {
 	RuleSet  []RuleSetEntry     `json:"rule_set,omitempty"`
 }
 
-// RuleSetEntry defines a named rule set (local file type)
+// RuleSetEntry defines a named rule set
 type RuleSetEntry struct {
-	Type   string      `json:"type"`
-	Tag    string      `json:"tag"`
-	Format string      `json:"format"`
-	Path   string      `json:"path"`
+	Type   string         `json:"type"`
+	Tag    string         `json:"tag"`
+	Format string         `json:"format,omitempty"`
+	Path   string         `json:"path,omitempty"`
+	Rules  []HeadlessRule `json:"rules,omitempty"`
+}
+
+// HeadlessRule matches traffic without an outbound (used inside rule-sets)
+type HeadlessRule struct {
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`
+	DomainKeyword []string `json:"domain_keyword,omitempty"`
 }
 
 // RouteRule for routing
 type RouteRule struct {
-	Inbound  []string `json:"inbound,omitempty"`
-	Protocol string   `json:"protocol,omitempty"`
-	Outbound string   `json:"outbound"`
-	RuleSet  []string `json:"rule_set,omitempty"`
+	Inbound       []string `json:"inbound,omitempty"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Outbound      string   `json:"outbound"`
+	RuleSet       []string `json:"rule_set,omitempty"`
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`
+	DomainKeyword []string `json:"domain_keyword,omitempty"`
 }
 
 // SingBoxGenerator generates sing-box configuration from user config
@@ -301,6 +310,12 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	switch g.userConfig.RouteMode {
 	case "direct":
 		rc.Final = "direct"
+	case "rule":
+		rc.Final = "proxy"
+		// Simple rule: .cn domains go direct, everything else through proxy.
+		// No external database files needed.
+		rc.Rules = append(rc.Rules,
+			RouteRule{DomainSuffix: []string{"cn"}, Outbound: "direct"})
 	default: // "global" or empty
 		rc.Final = "proxy"
 	}

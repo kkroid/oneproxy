@@ -11,7 +11,7 @@ struct Strings {
     QString unifiedLabel;
     QString autoStart;
     QString systemProxy;
-    QString routingMode, modeGlobal, modeDirect;
+    QString routingMode, modeGlobal, modeRule, modeDirect;
     QString openConfig;
     QString exportConfig, importConfig;
 };
@@ -26,7 +26,7 @@ inline Strings getStrings() {
         "统一出口 %1",
         "开机自启",
         "设为系统代理",
-        "代理模式", "全局", "直连",
+        "代理模式", "全局", "规则", "直连",
         "打开配置文件",
         "导出配置...", "导入配置...",
     } : Strings{
@@ -37,7 +37,7 @@ inline Strings getStrings() {
         "Unified %1",
         "Auto-start on boot",
         "Set as system proxy",
-        "Routing Mode", "Global", "Direct",
+        "Routing Mode", "Global", "Rule", "Direct",
         "Open Config File",
         "Export Config...", "Import Config...",
     };
