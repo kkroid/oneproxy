@@ -138,12 +138,10 @@ type HeadlessRule struct {
 
 // RouteRule for routing
 type RouteRule struct {
-	Inbound       []string `json:"inbound,omitempty"`
-	Protocol      string   `json:"protocol,omitempty"`
-	Outbound      string   `json:"outbound"`
-	RuleSet       []string `json:"rule_set,omitempty"`
-	DomainSuffix  []string `json:"domain_suffix,omitempty"`
-	DomainKeyword []string `json:"domain_keyword,omitempty"`
+	Inbound  []string `json:"inbound,omitempty"`
+	Protocol string   `json:"protocol,omitempty"`
+	Outbound string   `json:"outbound"`
+	RuleSet  []string `json:"rule_set,omitempty"`
 }
 
 // SingBoxGenerator generates sing-box configuration from user config
@@ -312,10 +310,13 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 		rc.Final = "direct"
 	case "rule":
 		rc.Final = "proxy"
-		// Simple rule: .cn domains go direct, everything else through proxy.
-		// No external database files needed.
+		rc.RuleSet = []RuleSetEntry{
+			{Type: "local", Tag: "geoip-cn",  Format: "source", Path: filepath.Join(g.baseDir, "bin", "geoip-cn.json")},
+			{Type: "local", Tag: "geosite-cn", Format: "source", Path: filepath.Join(g.baseDir, "bin", "geosite-cn.json")},
+		}
 		rc.Rules = append(rc.Rules,
-			RouteRule{DomainSuffix: []string{"cn"}, Outbound: "direct"})
+			RouteRule{RuleSet: []string{"geoip-cn"},  Outbound: "direct"},
+			RouteRule{RuleSet: []string{"geosite-cn"}, Outbound: "direct"})
 	default: // "global" or empty
 		rc.Final = "proxy"
 	}
