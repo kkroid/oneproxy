@@ -275,16 +275,13 @@ private:
 
         auto *actGlobal = routeMenu->addAction(s.modeGlobal);
         actGlobal->setCheckable(true); routeGroup->addAction(actGlobal);
-        auto *actRule  = routeMenu->addAction(s.modeRule);
-        actRule->setCheckable(true);  routeGroup->addAction(actRule);
         auto *actDirect = routeMenu->addAction(s.modeDirect);
         actDirect->setCheckable(true); routeGroup->addAction(actDirect);
 
         QString curMode = routingMode();
-        (curMode == "rule" ? actRule : curMode == "direct" ? actDirect : actGlobal)->setChecked(true);
+        (curMode == "direct" ? actDirect : actGlobal)->setChecked(true);
 
         connect(actGlobal, &QAction::triggered, this, [this]() { setRoutingMode("global"); });
-        connect(actRule,  &QAction::triggered, this, [this]() { setRoutingMode("rule"); });
         connect(actDirect,&QAction::triggered, this, [this]() { setRoutingMode("direct"); });
 
         menu->addSeparator();

@@ -33,12 +33,6 @@ var (
 
 // ---- helpers ----
 
-func copyFile(src, dst string) {
-	if data, err := os.ReadFile(src); err == nil {
-		os.WriteFile(dst, data, 0644)
-	}
-}
-
 func errStr(err error) *C.char {
 	if err == nil { return nil }
 	return C.CString(err.Error())
@@ -64,15 +58,32 @@ func resolveDataDir() string {
 	return dir
 }
 
-// exeDir returns the directory containing the host executable. In production
-// this is the tray EXE's directory (which also contains config.json and the
-// DLL), making it the right anchor for resolving relative asset paths.
+// exeDir returns the directory containing oneproxy.dll and the tray EXE.
+// The tray already calls SetCurrentDirectory to the correct location in
+// loadDLL(), so cwd is reliable in production. For standalone/test use,
+// we check multiple locations.
 func exeDir() string {
+	// Primary: cwd (tray sets this via SetCurrentDirectory in loadDLL)
+	cwd, err := os.Getwd()
+	if err == nil {
+		if _, err := os.Stat(filepath.Join(cwd, "oneproxy.dll")); err == nil {
+			return cwd
+		}
+	}
+
+	// Fallback: host EXE dir (works when built standalone, not DLL)
 	exe, err := os.Executable()
 	if err == nil {
-		return filepath.Dir(exe)
+		dir := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(dir, "oneproxy.dll")); err == nil {
+			return dir
+		}
+		// In test scenarios (Python), check if bin/ exists in EXE dir
+		if _, err := os.Stat(filepath.Join(dir, "bin", "sing-box.exe")); err == nil {
+			return dir
+		}
 	}
-	// Fallback — shouldn't happen on any real Windows system
+
 	dir, _ := filepath.Abs(".")
 	return dir
 }
@@ -129,18 +140,9 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	dataDir := resolveDataDir()
 	genCfg := filepath.Join(dataDir, "singbox_generated.json")
-
-	// Copy geoip/geosite to data dir so sing-box can find them
 	ed := exeDir()
-	for _, db := range []string{"geoip.db", "geosite.db"} {
-		src := filepath.Join(ed, "bin", db)
-		dst := filepath.Join(dataDir, db)
-		if _, err := os.Stat(dst); os.IsNotExist(err) {
-			copyFile(src, dst)
-		}
-	}
 
-	gen := config.NewSingBoxGenerator(cfg)
+	gen := config.NewSingBoxGenerator(cfg, ed)
 	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
 
 	// sing-box binary — try cwd/bin/ first, then exe dir/bin/

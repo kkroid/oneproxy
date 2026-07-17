@@ -140,11 +140,13 @@ type RouteRule struct {
 // SingBoxGenerator generates sing-box configuration from user config
 type SingBoxGenerator struct {
 	userConfig *Config
+	baseDir    string // absolute path to the install/exe dir (for db paths)
 }
 
-// NewSingBoxGenerator creates a new generator
-func NewSingBoxGenerator(cfg *Config) *SingBoxGenerator {
-	return &SingBoxGenerator{userConfig: cfg}
+// NewSingBoxGenerator creates a new generator. baseDir is the directory
+// containing the bin/ folder with geoip.db/geosite.db.
+func NewSingBoxGenerator(cfg *Config, baseDir string) *SingBoxGenerator {
+	return &SingBoxGenerator{userConfig: cfg, baseDir: baseDir}
 }
 
 // Generate creates a sing-box configuration
@@ -299,15 +301,6 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	switch g.userConfig.RouteMode {
 	case "direct":
 		rc.Final = "direct"
-	case "rule":
-		rc.Final = "proxy"
-		rc.RuleSet = []RuleSetEntry{
-			{Type: "local", Tag: "geoip-cn",  Format: "binary", Path: "geoip.db"},
-			{Type: "local", Tag: "geosite-cn", Format: "binary", Path: "geosite.db"},
-		}
-		rc.Rules = append(rc.Rules,
-			RouteRule{RuleSet: []string{"geoip-cn"},  Outbound: "direct"},
-			RouteRule{RuleSet: []string{"geosite-cn"}, Outbound: "direct"})
 	default: // "global" or empty
 		rc.Final = "proxy"
 	}
