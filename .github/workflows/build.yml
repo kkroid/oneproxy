@@ -25,15 +25,20 @@ jobs:
         run: go build -buildmode=c-shared -o trayapp/build/oneproxy.dll ./cmd/oneproxy-dll
 
       - name: Build Installer
+        shell: cmd
         run: |
-          copy configs\config.example.json trayapp\build\config.json
+          copy configs\config.example.json trayapp\build\config-placeholder.json
           copy trayapp\installer.iss trayapp\build\
           cd trayapp\build
           iscc installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OneProxy-Installer
+          path: dist/OneProxy-*.exe
 
       - name: Attach to Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          body: "Download the installer and double-click to install. See [README.md](README.md) for full documentation."
           files: dist/OneProxy-*.exe
