@@ -12,8 +12,9 @@ type Config struct {
 	Version     string        `json:"version"`
 	LogLevel    string        `json:"log_level"`
 	Unified     UnifiedConfig `json:"unified"`
-	RouteMode   string        `json:"route_mode,omitempty"`   // "global" (default), "rule", "direct"
-	ProxySites  []string      `json:"proxy_sites,omitempty"`  // domains always routed through proxy in rule mode
+	RouteMode       string        `json:"route_mode,omitempty"`       // "global" (default), "rule", "direct"
+	ProxySites      []string      `json:"proxy_sites,omitempty"`      // domains always routed through proxy in rule mode
+	SubscriptionURL string        `json:"subscription_url,omitempty"`  // optional JMS/v2ray subscription URL
 	HealthCheck HealthCheck   `json:"health_check"`
 	DNS         DNSConfig     `json:"dns"`
 	Proxies     []ProxyConfig `json:"proxies"`
@@ -58,8 +59,8 @@ type ProxyConfig struct {
 
 // InboundConfig represents local listening configuration
 type InboundConfig struct {
-	Listen    string `json:"listen"`
-	ProxyType string `json:"proxy_type"` // socks5, http, or mixed
+	Listen string `json:"listen"`
+	// ProxyType removed — always "mixed" (SOCKS5 + HTTP on same port).
 }
 
 // Load reads configuration from file

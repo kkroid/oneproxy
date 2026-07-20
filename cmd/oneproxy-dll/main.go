@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/kkroid/oneproxy/internal/config"
+	"github.com/kkroid/oneproxy/internal/logger"
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
@@ -28,6 +29,7 @@ var (
 	gHealthChecker *proxy.HealthChecker
 	gDNSFlusher    *proxy.DNSFlusher
 	gConfig        *config.Config
+	gLogger        *logger.Logger
 	gMu            sync.Mutex
 )
 
@@ -123,7 +125,20 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	cp := C.GoString(configPath)
 	found, err := resolveConfig(cp)
-	if err != nil { return errStr(err) }
+	if err != nil {
+		// Fresh install or config deleted — copy placeholder from exe dir
+		placeholder := filepath.Join(exeDir(), "config-placeholder.json")
+		target := filepath.Join(resolveDataDir(), "config.json")
+		if src, e := os.ReadFile(placeholder); e == nil {
+			if e := os.WriteFile(target, src, 0644); e == nil {
+				found = target
+				err = nil
+			}
+		}
+		if err != nil {
+			return errStr(fmt.Errorf("config not found and no placeholder available"))
+		}
+	}
 
 	cfg, err := config.Load(found)
 	if err != nil { return errStr(err) }
@@ -139,20 +154,31 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	gConfig = cfg
 
 	dataDir := resolveDataDir()
+
+	// Init application logger (10 MB max, keep 3 rotated backups)
+	if gLogger == nil {
+		gLogger, _ = logger.New(filepath.Join(dataDir, "logs", "oneproxy.log"), 10, 3)
+	}
+	if gLogger != nil {
+		gLogger.Info("OneProxy v0.5.0 starting, route=%s, proxies=%d, port=%d",
+			cfg.RouteMode, len(cfg.GetEnabledProxies()), cfg.Unified.Port)
+	}
+
 	genCfg := filepath.Join(dataDir, "singbox_generated.json")
 	ed := exeDir()
 
 	gen := config.NewSingBoxGenerator(cfg, ed)
 	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
 
-	// sing-box binary — try cwd/bin/ first, then exe dir/bin/
+	// sing-box binary - try cwd/bin/ first, then exe dir/bin/
 	cwd, _ := filepath.Abs(".")
-	
+
 	for _, dir := range []string{cwd, ed} {
 		ab := filepath.Join(dir, "bin", "sing-box.exe")
 		ab, _ = filepath.Abs(ab)
 		if _, err := os.Stat(ab); err == nil {
 			manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
+			manager.SetLogger(gLogger)
 			gManager = manager
 			goto started
 		}
@@ -161,6 +187,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 started:
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
+	gHealthChecker.SetLogger(gLogger)
 	gDNSFlusher = proxy.NewDNSFlusher()
 
 	gHealthChecker.SetFailureCallback(func(name string) {
@@ -168,8 +195,16 @@ started:
 	})
 
 	if err := gManager.Start(); err != nil { return errStr(err) }
-	if cfg.HealthCheck.Enabled { gHealthChecker.Start() }
-	fmt.Println("OneProxy: started")
+	if cfg.HealthCheck.Enabled {
+		if gLogger != nil {
+			gLogger.Info("health check started, interval=%ds, timeout=%ds",
+				cfg.HealthCheck.IntervalSeconds, cfg.HealthCheck.TimeoutSeconds)
+		}
+		gHealthChecker.Start()
+	}
+	if gLogger != nil {
+		gLogger.Info("started OK")
+	}
 	return nil
 }
 
@@ -177,10 +212,11 @@ started:
 func OneProxy_Stop() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
+	if gLogger != nil { gLogger.Info("stopping") }
 	if gHealthChecker != nil { gHealthChecker.Stop() }
 	if gManager != nil { gManager.Stop() }
 	gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
-	fmt.Println("OneProxy: stopped")
+	if gLogger != nil { gLogger.Info("stopped") }
 	return nil
 }
 
@@ -189,9 +225,11 @@ func OneProxy_Restart() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
 	if gManager == nil { return errStr(fmt.Errorf("not started")) }
+	if gLogger != nil { gLogger.Info("restarting") }
 	if gHealthChecker != nil { gHealthChecker.Stop() }
 	gManager.Restart()
 	if gConfig != nil && gConfig.HealthCheck.Enabled && gHealthChecker != nil { gHealthChecker.Start() }
+	if gLogger != nil { gLogger.Info("restarted") }
 	return nil
 }
 
@@ -266,9 +304,32 @@ func sanitizeTag(name string) string {
 	return b.String()
 }
 
+// reloadAndRestart regenerates singbox_generated.json from gConfig and restarts
+// sing-box. Must be called with gMu held.
+func reloadAndRestart() error {
+	if gConfig == nil || gManager == nil || !gManager.IsRunning() {
+		return nil
+	}
+	ed := exeDir()
+	genCfg := filepath.Join(resolveDataDir(), "singbox_generated.json")
+	gen := config.NewSingBoxGenerator(gConfig, ed)
+	if err := gen.SaveToFile(genCfg); err != nil {
+		return err
+	}
+	gManager.SetConfigPath(genCfg)
+	if gHealthChecker != nil {
+		gHealthChecker.Stop()
+		gHealthChecker.SetConfig(gConfig)
+	}
+	gManager.Restart()
+	if gConfig.HealthCheck.Enabled && gHealthChecker != nil {
+		gHealthChecker.Start()
+	}
+	return nil
+}
+
 //export OneProxy_ExportConfig
 func OneProxy_ExportConfig() *C.char {
-	// Use the same resolution order as Start: cwd → exeDir → dataDir
 	path, err := resolveConfig("config.json")
 	if err != nil {
 		return errStr(fmt.Errorf("cannot find config: %w", err))
@@ -281,20 +342,65 @@ func OneProxy_ExportConfig() *C.char {
 }
 
 //export OneProxy_ImportConfig
-func OneProxy_ImportConfig(b64 *C.char) *C.char {
-	raw, err := base64.StdEncoding.DecodeString(C.GoString(b64))
+func OneProxy_ImportConfig(input *C.char) *C.char {
+	raw := C.GoString(input)
+
+	// Smart detection: URL or base64 backup?
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		// ─── Subscription URL ──────────────────────────────
+		proxies, subURL, err := config.FetchSubscription(raw, 10801)
+		if err != nil {
+			return errStr(fmt.Errorf("fetch subscription: %w", err))
+		}
+
+		// Load existing config to preserve other settings
+		var cfg *config.Config
+		cfgPath, pathErr := resolveConfig("config.json")
+		if pathErr == nil {
+			cfg, _ = config.Load(cfgPath)
+		}
+		if cfg == nil {
+			cfg = &config.Config{Version: "1.0"}
+		}
+		cfg.Proxies = proxies
+		cfg.SubscriptionURL = subURL
+
+		savePath := filepath.Join(resolveDataDir(), "config.json")
+		if err := cfg.Save(savePath); err != nil {
+			return errStr(fmt.Errorf("save config: %w", err))
+		}
+
+		// Replace running config, regenerate + restart
+		gMu.Lock()
+		gConfig = cfg
+		_ = reloadAndRestart()
+		gMu.Unlock()
+		return nil
+	}
+
+	// ─── Base64 backup ──────────────────────────────────
+	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return errStr(fmt.Errorf("invalid base64: %w", err))
+		return errStr(fmt.Errorf("not a valid URL or base64 backup"))
 	}
 	var tmp interface{}
-	if err := json.Unmarshal(raw, &tmp); err != nil {
-		return errStr(fmt.Errorf("invalid JSON: %w", err))
+	if err := json.Unmarshal(decoded, &tmp); err != nil {
+		return errStr(fmt.Errorf("not valid JSON"))
 	}
-	// Always write to the user-writable data dir
-	path := filepath.Join(resolveDataDir(), "config.json")
-	if err := os.WriteFile(path, raw, 0644); err != nil {
+
+	savePath := filepath.Join(resolveDataDir(), "config.json")
+	if err := os.WriteFile(savePath, decoded, 0644); err != nil {
 		return errStr(fmt.Errorf("cannot write config: %w", err))
 	}
+
+		// Reload, regenerate + restart
+		gMu.Lock()
+		cfg, _ := config.Load(savePath)
+		if cfg != nil {
+			gConfig = cfg
+		}
+		_ = reloadAndRestart()
+		gMu.Unlock()
 	return nil
 }
 

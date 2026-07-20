@@ -19,8 +19,9 @@ type SingBoxConfig struct {
 
 // LogConfig for sing-box logging
 type LogConfig struct {
-	Level  string `json:"level"`
-	Output string `json:"output,omitempty"`
+	Level     string `json:"level"`
+	Output    string `json:"output,omitempty"`
+	Timestamp bool   `json:"timestamp"`
 }
 
 // SingBoxDNS configuration
@@ -162,7 +163,8 @@ func NewSingBoxGenerator(cfg *Config, baseDir string) *SingBoxGenerator {
 func (g *SingBoxGenerator) Generate() (*SingBoxConfig, error) {
 	sbConfig := &SingBoxConfig{
 		Log: LogConfig{
-			Level: g.userConfig.LogLevel,
+			Level:     g.userConfig.LogLevel,
+			Timestamp: true,
 		},
 		DNS:       g.generateDNS(),
 		Inbounds:  g.generateInbounds(),
@@ -197,12 +199,7 @@ func (g *SingBoxGenerator) generateDNS() SingBoxDNS {
 func (g *SingBoxGenerator) generateInbounds() []SingBoxInbound {
 	var inbounds []SingBoxInbound
 
-	inboundType := "socks"
-	if g.userConfig.Inbound.ProxyType == "http" {
-		inboundType = "http"
-	} else if g.userConfig.Inbound.ProxyType == "mixed" {
-		inboundType = "mixed"
-	}
+	inboundType := "mixed" // SOCKS5 + HTTP on each port
 
 	// Individual ports — one per proxy that has local_port set
 	for _, proxy := range g.userConfig.GetEnabledProxies() {

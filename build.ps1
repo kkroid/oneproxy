@@ -81,6 +81,8 @@ if (Test-Path "$root\bin") {
 if (-not (Test-Path "$buildDir\config.json")) {
     if (Test-Path "$root\config.json") { Copy-Item -Force "$root\config.json" "$buildDir\" }
 }
+# Always copy placeholder so DLL can auto-recover if user deletes config.json
+if (Test-Path "$root\config-placeholder.json") { Copy-Item -Force "$root\config-placeholder.json" "$buildDir\" }
 
 # 4. Verify
 $missing = @()

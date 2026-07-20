@@ -61,6 +61,9 @@ Source: "bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs creat
 ; packaging a real config.json from the build directory.
 Source: "config-placeholder.json"; DestDir: "{%USERPROFILE}\.oneproxy"; DestName: "config.json"; Flags: ignoreversion onlyifdoesntexist
 
+; Also keep a copy in app dir as fallback template — DLL uses it to recover if user deletes config.json
+Source: "config-placeholder.json"; DestDir: "{app}"; Flags: ignoreversion
+
 ; Create empty logs dir
 [Dirs]
 Name: "{app}\logs"

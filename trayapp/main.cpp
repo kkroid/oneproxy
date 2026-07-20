@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QDir>
 #include <QFileDialog>
+#include <QClipboard>
 #include <QDebug>
 #include <thread>
 #include <functional>
@@ -196,7 +197,7 @@ private:
         else if (total == 0)  { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — no proxies"); }
         else if (ok == total) { tray->setIcon(icoGreen);  tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
         else if (ok > 0)      { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
-        else                  { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1 proxies, checking...").arg(total)); }
+        else if (ok == 0)     { tray->setIcon(icoRed);    tray->setToolTip(QString("OneProxy %1/%2 all down").arg(ok).arg(total)); }
     }
 
     // Called only on QMenu::aboutToShow — rebuilds items right before display.
@@ -206,6 +207,10 @@ private:
 
         auto s = getStrings();
         menu->clear();
+
+        // Status — always at top
+        menu->addAction(running ? s.running : s.stopped)->setEnabled(false);
+        menu->addSeparator();
 
         // Unified proxy: show the address and active node at the top
         if (unifiedPort > 0 && running) {
@@ -218,9 +223,9 @@ private:
                 }
             }
             QString line = active.isEmpty()
-                ? QString("127.0.0.1:%1 — waiting...").arg(unifiedPort)
-                : QString("127.0.0.1:%1 ◀ %2 %3ms").arg(unifiedPort).arg(active).arg(activeLat);
-            menu->addAction(line)->setEnabled(false);
+                ? QString("127.0.0.1:%1  auto  waiting...").arg(unifiedPort)
+                : QString("127.0.0.1:%1  auto ◀ %2  %3ms").arg(unifiedPort).arg(active).arg(activeLat);
+            menu->addAction(line);
             menu->addSeparator();
         }
 
@@ -247,8 +252,6 @@ private:
             }
         }
 
-        menu->addSeparator();
-        menu->addAction(running ? s.running : s.stopped)->setEnabled(false);
         menu->addSeparator();
 
         if (running) {
@@ -298,7 +301,8 @@ private:
         menu->addSeparator();
         menu->addAction(s.openConfig, this, [this]() { doOpenConfig(); });
         menu->addAction(s.exportConfig, this, &OneProxyTray::doExportConfig);
-        menu->addAction(s.importConfig, this, &OneProxyTray::doImportConfig);
+        menu->addAction(s.importClipboard, this, &OneProxyTray::doImportClipboard);
+        menu->addAction(s.importBackup, this, &OneProxyTray::doImportBackup);
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
     }
@@ -358,9 +362,28 @@ private:
         }
     }
 
-    void doImportConfig() {
-        QString path = QFileDialog::getOpenFileName(nullptr, "Import Config",
-            QDir::homePath(), "JSON (*.json)");
+    void doImportClipboard() {
+        QClipboard *clipboard = QApplication::clipboard();
+        QString text = clipboard->text().trimmed();
+        if (text.isEmpty()) {
+            tray->showMessage("OneProxy", "Clipboard is empty", QSystemTrayIcon::Warning, 3000);
+            return;
+        }
+        if (!text.startsWith("http://") && !text.startsWith("https://")) {
+            tray->showMessage("OneProxy", "Clipboard is not a valid subscription URL", QSystemTrayIcon::Warning, 3000);
+            return;
+        }
+        auto err = callFree(pImport((char*)text.toUtf8().constData()));
+        if (!err.isEmpty()) {
+            tray->showMessage("OneProxy", "Subscription import failed: " + err, QSystemTrayIcon::Critical, 5000);
+            return;
+        }
+        tray->showMessage("OneProxy", "Subscription imported, restarting...", QSystemTrayIcon::Information, 2000);
+    }
+
+    void doImportBackup() {
+        QString path = QFileDialog::getOpenFileName(nullptr, "Import Backup",
+            QDir::homePath(), "Config Backup (*.*)");
         if (path.isEmpty()) return;
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
@@ -371,7 +394,6 @@ private:
             return;
         }
         tray->showMessage("OneProxy", "Config imported, restarting...", QSystemTrayIcon::Information, 2000);
-        QTimer::singleShot(1000, this, [this]() { doRestart(); });
     }
 
     static bool isAutoStart() {
@@ -421,7 +443,7 @@ private:
         if (on) {
             DWORD en = 1;
             RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
-            auto server = L"socks=127.0.0.1:1080";
+            auto server = L"http=127.0.0.1:1080";
             RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)server, (DWORD)((wcslen(server)+1)*sizeof(wchar_t)));
             auto override = L"<local>";
             RegSetValueExW(hKey, L"ProxyOverride", 0, REG_SZ, (BYTE*)override, (DWORD)((wcslen(override)+1)*sizeof(wchar_t)));
@@ -430,9 +452,11 @@ private:
             RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
         }
         RegCloseKey(hKey);
-        // Notify Windows to pick up the change immediately
+        // Notify all apps to re-read proxy settings immediately — no restart needed.
         InternetSetOptionW(nullptr, 39, nullptr, 0);  // INTERNET_OPTION_SETTINGS_CHANGED
         InternetSetOptionW(nullptr, 37, nullptr, 0);  // INTERNET_OPTION_REFRESH
+        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+                           (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 2000, nullptr);
     }
 
     // Current routing mode — persisted in a tiny registry string (no DLL needed)
@@ -474,8 +498,6 @@ int main(int argc, char *argv[]) {
     icoRed    = loadIcon("red.ico");    qDebug() << "  red ok";
     if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
     qDebug() << "DLL OK";
-    if (!QFile::exists("config.json")) { qCritical() << "no config.json"; return 1; }
-
     createTrayWindow();
     auto *t = new OneProxyTray;
     g_tray = t->tray;

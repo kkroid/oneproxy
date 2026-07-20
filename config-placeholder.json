@@ -29,7 +29,6 @@
     }
   ],
   "inbound": {
-    "listen": "127.0.0.1",
-    "proxy_type": "socks5"
+    "listen": "127.0.0.1"
   }
 }
