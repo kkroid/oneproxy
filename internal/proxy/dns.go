@@ -41,7 +41,7 @@ func (f *DNSFlusher) FlushAll(manager *Manager) error {
 
 func noWindow(name string, arg ...string) *exec.Cmd {
 	cmd := exec.Command(name, arg...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd
 }
 

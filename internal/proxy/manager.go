@@ -54,10 +54,15 @@ func (m *Manager) SetLogger(l *logger.Logger) {
 // only that specific process is killed (scoped). Otherwise all sing-box.exe
 // processes are killed (used when no previous PID is known).
 func killOrphanedSingBox(pid int) {
+	cmd := func(name string, args ...string) *exec.Cmd {
+		c := exec.Command(name, args...)
+		c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return c
+	}
 	if pid != 0 {
-		_ = exec.Command("taskkill", "/F", "/PID", fmt.Sprintf("%d", pid)).Run()
+		_ = cmd("taskkill", "/F", "/PID", fmt.Sprintf("%d", pid)).Run()
 	} else {
-		_ = exec.Command("taskkill", "/F", "/IM", "sing-box.exe").Run()
+		_ = cmd("taskkill", "/F", "/IM", "sing-box.exe").Run()
 	}
 }
 
@@ -137,7 +142,7 @@ func (m *Manager) Start() error {
 
 	// Create command — hide console window
 	m.cmd = exec.Command(m.singboxPath, "run", "--disable-color", "-c", m.configPath)
-	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	m.cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
 	m.cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
 	m.cmd.Stdout = logFile
