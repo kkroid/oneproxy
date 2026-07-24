@@ -15,45 +15,44 @@ import (
 
 // HealthResult represents the health check result for a single proxy
 type HealthResult struct {
-	ProxyName    string
-	LocalPort    int
-	IsHealthy    bool
-	Latency      time.Duration
-	LastCheck    time.Time
-	ErrorCount   int
-	LastError    string
+	ProxyName  string
+	LocalPort  int
+	IsHealthy  bool
+	Latency    time.Duration
+	LastCheck  time.Time
+	ErrorCount int
+	LastError  string
 }
 
 // HealthChecker manages health checking for all proxies
 type HealthChecker struct {
-	config     *config.Config
-	manager    *Manager
-	results    map[string]*HealthResult
-	resultsMux sync.RWMutex
-	stateMux   sync.Mutex // guards isRunning, stopChan
-	stopChan   chan struct{}
-	isRunning  bool
-	onFailure  func(proxyName string) // callback when proxy fails
-	appLog     *logger.Logger
+	config       *config.Config
+	manager      *Manager
+	results      map[string]*HealthResult
+	resultsMux   sync.RWMutex
+	stateMux     sync.Mutex // guards isRunning, stopChan, wg, allDownCount
+	stopChan     chan struct{}
+	isRunning    bool
+	stopped      bool           // true once Stop() has closed stopChan
+	wg           sync.WaitGroup // tracks in-flight CheckAll rounds
+	allDownCount int            // consecutive all-down rounds
+	onAllDown    func()         // callback when ALL nodes are down
+	appLog       *logger.Logger
 }
 
 // NewHealthChecker creates a new health checker
 func NewHealthChecker(cfg *config.Config, manager *Manager) *HealthChecker {
 	hc := &HealthChecker{
-		config:    cfg,
-		manager:   manager,
-		results:   make(map[string]*HealthResult),
-		stopChan:  make(chan struct{}),
-		isRunning: false,
+		config:   cfg,
+		manager:  manager,
+		results:  make(map[string]*HealthResult),
+		stopChan: make(chan struct{}),
 	}
 
-	// Initialize results for all enabled proxies
 	for _, proxy := range cfg.GetEnabledProxies() {
 		hc.results[proxy.Name] = &HealthResult{
-			ProxyName:  proxy.Name,
-			LocalPort:  proxy.LocalPort,
-			IsHealthy:  false,
-			ErrorCount: 0,
+			ProxyName: proxy.Name,
+			LocalPort: proxy.LocalPort,
 		}
 	}
 
@@ -61,7 +60,6 @@ func NewHealthChecker(cfg *config.Config, manager *Manager) *HealthChecker {
 }
 
 // Start begins periodic health checking with adaptive backoff.
-// 5s when partially degraded, 10s when all down, 60s when all healthy.
 func (hc *HealthChecker) Start() {
 	hc.stateMux.Lock()
 	defer hc.stateMux.Unlock()
@@ -71,10 +69,14 @@ func (hc *HealthChecker) Start() {
 	}
 
 	hc.isRunning = true
+	hc.stopped = false
+	hc.allDownCount = 0
 	hc.stopChan = make(chan struct{})
 	stop := hc.stopChan
 
+	hc.wg.Add(1)
 	go func() {
+		defer hc.wg.Done()
 		hc.CheckAll() // first check immediately
 		for {
 			interval := hc.nextInterval()
@@ -90,17 +92,22 @@ func (hc *HealthChecker) Start() {
 	}()
 }
 
-// Stop stops the health checker
+// Stop stops the health checker and waits for the current CheckAll
+// round to finish. This prevents stale checks from racing with Restart.
 func (hc *HealthChecker) Stop() {
 	hc.stateMux.Lock()
-	defer hc.stateMux.Unlock()
-
 	if !hc.isRunning {
+		hc.stateMux.Unlock()
 		return
 	}
-
 	hc.isRunning = false
+	hc.stopped = true
 	close(hc.stopChan)
+	hc.stateMux.Unlock()
+
+	// Wait for in-flight CheckAll to complete — prevents stale checks
+	// from triggering all-down callbacks after sing-box restarts.
+	hc.wg.Wait()
 }
 
 // nextInterval returns the adaptive check interval based on current health.
@@ -112,9 +119,7 @@ func (hc *HealthChecker) nextInterval() time.Duration {
 	for _, r := range hc.results {
 		if r.LocalPort > 0 {
 			total++
-			if r.IsHealthy {
-				ok++
-			}
+			if r.IsHealthy { ok++ }
 		}
 	}
 	if total == 0 || ok == total {
@@ -125,19 +130,64 @@ func (hc *HealthChecker) nextInterval() time.Duration {
 	}
 	return 5 * time.Second // partial degradation — aggressive
 }
-// CheckAll checks all enabled proxies concurrently
-func (hc *HealthChecker) CheckAll() {
-	var wg sync.WaitGroup
 
-	for _, proxy := range hc.config.GetEnabledProxies() {
-		wg.Add(1)
+// CheckAll checks all enabled proxies concurrently.
+// Requires 3 consecutive all-down rounds before triggering recovery,
+// and never triggers during recovery or after Stop.
+func (hc *HealthChecker) CheckAll() {
+	hc.wg.Add(1)
+	defer hc.wg.Done()
+
+	cfg := hc.config
+
+	// Check all nodes concurrently
+	var innerWg sync.WaitGroup
+	for _, proxy := range cfg.GetEnabledProxies() {
+		innerWg.Add(1)
 		go func(p config.ProxyConfig) {
-			defer wg.Done()
+			defer innerWg.Done()
 			hc.CheckProxy(p.Name, p.LocalPort)
 		}(proxy)
 	}
+	innerWg.Wait()
 
-	wg.Wait()
+	ok, total := 0, 0
+	hc.resultsMux.RLock()
+	for _, r := range hc.results {
+		if r.LocalPort > 0 {
+			total++
+			if r.IsHealthy { ok++ }
+		}
+	}
+	hc.resultsMux.RUnlock()
+
+	hc.stateMux.Lock()
+	defer hc.stateMux.Unlock()
+
+	// Already stopped — don't trigger callbacks.
+	if hc.stopped {
+		return
+	}
+
+	if total == 0 || ok > 0 {
+		// Any node healthy → reset all-down counter.
+		hc.allDownCount = 0
+		return
+	}
+
+	// All nodes are down.
+	hc.allDownCount++
+	if hc.allDownCount < 3 || hc.onAllDown == nil {
+		return
+	}
+
+	// 3 consecutive all-down rounds → trigger recovery. Mark stopped
+	// to prevent re-triggering until Start() resets the state.
+	if hc.appLog != nil {
+		hc.appLog.Warn("all %d nodes down for 3 rounds — triggering recovery", total)
+	}
+	hc.allDownCount = 0 // reset so if recovery fails we can fire again
+	go hc.onAllDown()
 }
 
 // CheckProxy checks a single proxy's health
@@ -145,22 +195,17 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 	hc.resultsMux.Lock()
 	result, exists := hc.results[proxyName]
 	if !exists {
-		result = &HealthResult{
-			ProxyName: proxyName,
-			LocalPort: localPort,
-		}
+		result = &HealthResult{ProxyName: proxyName, LocalPort: localPort}
 		hc.results[proxyName] = result
 	}
 	hc.resultsMux.Unlock()
 
-	// Create SOCKS5 dialer
 	dialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), nil, proxy.Direct)
 	if err != nil {
-		hc.updateResult(proxyName, false, 0, fmt.Sprintf("Failed to create dialer: %v", err))
+		hc.updateResult(proxyName, false, 0, fmt.Sprintf("dialer: %v", err))
 		return result
 	}
 
-	// Create HTTP client with SOCKS5 proxy
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialer.Dial(network, addr)
@@ -172,25 +217,21 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 		Timeout:   time.Duration(hc.config.HealthCheck.TimeoutSeconds) * time.Second,
 	}
 
-	// Measure latency
-	startTime := time.Now()
-
-	// Make request to test URL
 	testURL := hc.config.HealthCheck.TestURL
 	if testURL == "" {
 		testURL = "https://www.google.com/generate_204"
 	}
 
+	startTime := time.Now()
 	resp, err := client.Get(testURL)
 	latency := time.Since(startTime)
 
 	if err != nil {
-		hc.updateResult(proxyName, false, latency, fmt.Sprintf("Request failed: %v", err))
+		hc.updateResult(proxyName, false, latency, fmt.Sprintf("%v", err))
 		return result
 	}
 	defer resp.Body.Close()
 
-	// Check response status
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		hc.updateResult(proxyName, true, latency, "")
 	} else {
@@ -221,17 +262,8 @@ func (hc *HealthChecker) updateResult(proxyName string, isHealthy bool, latency 
 		result.IsHealthy = false
 		result.ErrorCount++
 		result.LastError = errorMsg
-
 		if wasHealthy && hc.appLog != nil {
 			hc.appLog.Warn("node %s went unhealthy: %s", proxyName, errorMsg)
-		}
-
-		// Trigger failure callback if error count reaches threshold
-		if result.ErrorCount >= 3 && hc.onFailure != nil {
-			if hc.appLog != nil {
-				hc.appLog.Warn("node %s failed 3 times — triggering DNS flush", proxyName)
-			}
-			go hc.onFailure(proxyName)
 		}
 	}
 }
@@ -245,8 +277,6 @@ func (hc *HealthChecker) GetResult(proxyName string) *HealthResult {
 	if !exists {
 		return nil
 	}
-
-	// Return a copy to avoid race conditions
 	resultCopy := *result
 	return &resultCopy
 }
@@ -256,19 +286,17 @@ func (hc *HealthChecker) GetAllResults() map[string]*HealthResult {
 	hc.resultsMux.RLock()
 	defer hc.resultsMux.RUnlock()
 
-	// Return a copy of all results
 	results := make(map[string]*HealthResult)
 	for name, result := range hc.results {
 		resultCopy := *result
 		results[name] = &resultCopy
 	}
-
 	return results
 }
 
-// SetFailureCallback sets the callback function for when a proxy fails
-func (hc *HealthChecker) SetFailureCallback(callback func(proxyName string)) {
-	hc.onFailure = callback
+// SetAllDownCallback sets the callback for when every node goes down.
+func (hc *HealthChecker) SetAllDownCallback(callback func()) {
+	hc.onAllDown = callback
 }
 
 // SetLogger sets the application logger.
@@ -277,19 +305,26 @@ func (hc *HealthChecker) SetLogger(l *logger.Logger) {
 }
 
 // SetConfig updates the config reference (used after import/restore).
+// Rebuilds the results map, preserving state for same-named nodes.
 func (hc *HealthChecker) SetConfig(cfg *config.Config) {
-	hc.config = cfg
-	// Reset results for any new proxies
 	hc.resultsMux.Lock()
 	defer hc.resultsMux.Unlock()
+
+	hc.config = cfg
+	newResults := make(map[string]*HealthResult)
 	for _, p := range cfg.GetEnabledProxies() {
-		if _, ok := hc.results[p.Name]; !ok {
-			hc.results[p.Name] = &HealthResult{
+		if old, ok := hc.results[p.Name]; ok {
+			// Preserve existing state
+			copy := *old
+			newResults[p.Name] = &copy
+		} else {
+			newResults[p.Name] = &HealthResult{
 				ProxyName: p.Name,
 				LocalPort: p.LocalPort,
 			}
 		}
 	}
+	hc.results = newResults
 }
 
 // IsRunning returns whether the health checker is running

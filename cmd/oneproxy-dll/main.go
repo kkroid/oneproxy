@@ -189,10 +189,26 @@ started:
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
 	gHealthChecker.SetLogger(gLogger)
 	gDNSFlusher = proxy.NewDNSFlusher()
+	gDNSFlusher.SetLogger(gLogger)
 
-	gHealthChecker.SetFailureCallback(func(name string) {
-		gDNSFlusher.FlushAll(gManager)
-	})
+	// Only register all-down recovery if config tells us to.
+	if cfg.DNS.FlushOnFailure {
+		cooldown := time.Duration(cfg.DNS.FlushIntervalSeconds) * time.Second
+		if cooldown <= 0 {
+			cooldown = 300 * time.Second
+		}
+		gDNSFlusher.SetCooldown(cooldown)
+		gHealthChecker.SetAllDownCallback(func() {
+			if gLogger != nil {
+				gLogger.Info("all-down recovery: flushing DNS (cooldown=%vs)", int(cooldown.Seconds()))
+			}
+			if err := gDNSFlusher.FlushAll(gManager); err != nil {
+				if gLogger != nil {
+					gLogger.Error("all-down recovery failed: %v", err)
+				}
+			}
+		})
+	}
 
 	if err := gManager.Start(); err != nil { return errStr(err) }
 	if cfg.HealthCheck.Enabled {
@@ -240,12 +256,14 @@ type statusOut struct {
 }
 
 type statusProxy struct {
-	Name      string `json:"name"`
-	Port      int    `json:"port"`
-	Type      string `json:"type"`
-	Enabled   bool   `json:"enabled"`
-	IsHealthy bool   `json:"is_healthy"`
-	LatencyMS int64  `json:"latency_ms"`
+	Name       string `json:"name"`
+	Port       int    `json:"port"`
+	Type       string `json:"type"`
+	Server     string `json:"server"`
+	ServerPort int    `json:"server_port"`
+	Enabled    bool   `json:"enabled"`
+	IsHealthy  bool   `json:"is_healthy"`
+	LatencyMS  int64  `json:"latency_ms"`
 }
 
 //export OneProxy_Status
@@ -258,7 +276,7 @@ func OneProxy_Status() *C.char {
 	if gConfig != nil {
 		out.UnifiedPort = gConfig.Unified.Port
 		for _, p := range gConfig.Proxies {
-			px := statusProxy{Name: p.Name, Port: p.LocalPort, Type: p.Type, Enabled: p.Enabled}
+			px := statusProxy{Name: p.Name, Port: p.LocalPort, Type: p.Type, Server: p.Server, ServerPort: p.Port, Enabled: p.Enabled}
 			if gHealthChecker != nil {
 				if r := gHealthChecker.GetResult(p.Name); r != nil {
 					px.IsHealthy = r.IsHealthy
@@ -305,9 +323,10 @@ func sanitizeTag(name string) string {
 }
 
 // reloadAndRestart regenerates singbox_generated.json from gConfig and restarts
-// sing-box. Must be called with gMu held.
+// sing-box. If sing-box is not currently running, it leaves the generated config
+// in place for the next Start.
 func reloadAndRestart() error {
-	if gConfig == nil || gManager == nil || !gManager.IsRunning() {
+	if gConfig == nil {
 		return nil
 	}
 	ed := exeDir()
@@ -315,6 +334,12 @@ func reloadAndRestart() error {
 	gen := config.NewSingBoxGenerator(gConfig, ed)
 	if err := gen.SaveToFile(genCfg); err != nil {
 		return err
+	}
+	if gManager == nil || !gManager.IsRunning() {
+		if gLogger != nil {
+			gLogger.Info("config saved — a restart is needed to apply")
+		}
+		return nil
 	}
 	gManager.SetConfigPath(genCfg)
 	if gHealthChecker != nil {
@@ -345,62 +370,115 @@ func OneProxy_ExportConfig() *C.char {
 func OneProxy_ImportConfig(input *C.char) *C.char {
 	raw := C.GoString(input)
 
-	// Smart detection: URL or base64 backup?
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		// ─── Subscription URL ──────────────────────────────
-		proxies, subURL, err := config.FetchSubscription(raw, 10801)
+	proxies := []config.ProxyConfig(nil)
+	subURL := ""
+	mergeMode := false // true = merge single proxy into existing list
+
+	switch {
+	case strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://"):
+		var err error
+		proxies, subURL, err = config.FetchSubscription(raw, 10801)
 		if err != nil {
 			return errStr(fmt.Errorf("fetch subscription: %w", err))
 		}
-
-		// Load existing config to preserve other settings
-		var cfg *config.Config
-		cfgPath, pathErr := resolveConfig("config.json")
-		if pathErr == nil {
-			cfg, _ = config.Load(cfgPath)
+	case strings.HasPrefix(raw, "ss://"), strings.HasPrefix(raw, "vmess://"):
+		px, err := config.ParseSubscriptionLine(raw)
+		if err != nil {
+			return errStr(fmt.Errorf("invalid proxy URL: %w", err))
 		}
-		if cfg == nil {
-			cfg = &config.Config{Version: "1.0"}
+		proxies = []config.ProxyConfig{px}
+		mergeMode = true // single proxy → merge, don't replace
+	default:
+		// Base64 backup
+		decoded, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return errStr(fmt.Errorf("not a valid URL or base64 backup"))
 		}
-		cfg.Proxies = proxies
-		cfg.SubscriptionURL = subURL
-
+		var tmp interface{}
+		if err := json.Unmarshal(decoded, &tmp); err != nil {
+			return errStr(fmt.Errorf("not valid JSON"))
+		}
 		savePath := filepath.Join(resolveDataDir(), "config.json")
-		if err := cfg.Save(savePath); err != nil {
-			return errStr(fmt.Errorf("save config: %w", err))
+		if err := os.WriteFile(savePath, decoded, 0644); err != nil {
+			return errStr(fmt.Errorf("cannot write config: %w", err))
 		}
-
-		// Replace running config, regenerate + restart
 		gMu.Lock()
-		gConfig = cfg
+		cfg, _ := config.Load(savePath)
+		if cfg != nil { gConfig = cfg }
 		_ = reloadAndRestart()
 		gMu.Unlock()
 		return nil
 	}
 
-	// ─── Base64 backup ──────────────────────────────────
-	decoded, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return errStr(fmt.Errorf("not a valid URL or base64 backup"))
-	}
-	var tmp interface{}
-	if err := json.Unmarshal(decoded, &tmp); err != nil {
-		return errStr(fmt.Errorf("not valid JSON"))
+	if len(proxies) == 0 {
+		return errStr(fmt.Errorf("no proxies found"))
 	}
 
-	savePath := filepath.Join(resolveDataDir(), "config.json")
-	if err := os.WriteFile(savePath, decoded, 0644); err != nil {
-		return errStr(fmt.Errorf("cannot write config: %w", err))
+	dataDir := resolveDataDir()
+	cfgPath := filepath.Join(dataDir, "config.json")
+	var cfg *config.Config
+	if existing, err := config.Load(cfgPath); err == nil {
+		cfg = existing
+	} else {
+		cfg = &config.Config{Version: "1.0"}
 	}
 
-		// Reload, regenerate + restart
-		gMu.Lock()
-		cfg, _ := config.Load(savePath)
-		if cfg != nil {
-			gConfig = cfg
+	if mergeMode {
+		// Single proxy → merge into existing list (replace if same server+port, else append).
+		// Keep existing subscription_url intact.
+		px := proxies[0]
+		px.Enabled = true
+
+		// Find next available local_port
+		maxPort := 10800
+		for _, p := range cfg.Proxies {
+			if p.LocalPort > maxPort {
+				maxPort = p.LocalPort
+			}
 		}
-		_ = reloadAndRestart()
-		gMu.Unlock()
+		px.LocalPort = maxPort + 1
+		if px.LocalPort < 10801 {
+			px.LocalPort = 10801
+		}
+		if px.Name == "" {
+			px.Name = px.Server
+		}
+
+		// Replace existing same server+port, otherwise append
+		replaced := false
+		for i, p := range cfg.Proxies {
+			if p.Server == px.Server && p.Port == px.Port {
+				px.Name = p.Name        // keep the old name
+				px.LocalPort = p.LocalPort // keep the old port
+				cfg.Proxies[i] = px
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			cfg.Proxies = append(cfg.Proxies, px)
+		}
+		// Do NOT clear subscription_url for single proxy imports.
+	} else {
+		for i := range proxies {
+			if proxies[i].Name == "" {
+				proxies[i].Name = fmt.Sprintf("Server%d", i+1)
+			}
+			proxies[i].LocalPort = 10801 + i
+			proxies[i].Enabled = true
+		}
+		cfg.Proxies = proxies
+		cfg.SubscriptionURL = subURL
+	}
+
+	if err := cfg.Save(cfgPath); err != nil {
+		return errStr(fmt.Errorf("save config: %w", err))
+	}
+
+	gMu.Lock()
+	gConfig = cfg
+	_ = reloadAndRestart()
+	gMu.Unlock()
 	return nil
 }
 

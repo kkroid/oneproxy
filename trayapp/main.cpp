@@ -235,14 +235,20 @@ private:
             if (!px["enabled"].toBool()) continue;
             QString name = px["name"].toString();
             bool h = px["is_healthy"].toBool();
-            int port = px["port"].toInt();
+            int port = px["port"].toInt();          // local port
             int lat = px["latency_ms"].toInt();
+            QString typ = px["type"].toString();
+            QString srv = px["server"].toString();
+            int srvPort = px["server_port"].toInt();
             bool isActive = (unifiedPort > 0 && h && name == active);
 
+            QString proto = (typ == "shadowsocks") ? "SS" : (typ == "vmess") ? "VM" : typ.left(3);
             QString dot = isActive ? "●" : (h ? "○" : "✗");
             QString label = h
-                ? QString("  %1 %2  :%3  %4ms").arg(dot).arg(name, -16).arg(port, 5).arg(lat)
-                : QString("  %1 %2  :%3  %4").arg(dot).arg(name, -16).arg(port, 5).arg(s.timeout);
+                ? QString("  %1  %2:%3 → :%4  %5  %6ms")
+                    .arg(dot).arg(name).arg(srvPort).arg(port).arg(proto).arg(lat)
+                : QString("  %1  %2:%3 → :%4  %5  %6")
+                    .arg(dot).arg(name).arg(srvPort).arg(port).arg(proto).arg(s.timeout);
 
             auto* a = menu->addAction(label);
             if (h && unifiedPort > 0 && !isActive) {
@@ -251,7 +257,6 @@ private:
                 a->setEnabled(false);
             }
         }
-
         menu->addSeparator();
 
         if (running) {
@@ -369,7 +374,8 @@ private:
             tray->showMessage("OneProxy", "Clipboard is empty", QSystemTrayIcon::Warning, 3000);
             return;
         }
-        if (!text.startsWith("http://") && !text.startsWith("https://")) {
+        if (!text.startsWith("http://") && !text.startsWith("https://") &&
+            !text.startsWith("ss://") && !text.startsWith("vmess://")) {
             tray->showMessage("OneProxy", "Clipboard is not a valid subscription URL", QSystemTrayIcon::Warning, 3000);
             return;
         }

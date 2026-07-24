@@ -44,7 +44,7 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 		if line == "" {
 			continue
 		}
-		px, err := parseSubscriptionLine(line)
+		px, err := ParseSubscriptionLine(line)
 		if err != nil {
 			continue // skip unrecognized protocols (vless, trojan, etc.)
 		}
@@ -62,7 +62,7 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 	return proxies, subURL, nil
 }
 
-func parseSubscriptionLine(line string) (ProxyConfig, error) {
+func ParseSubscriptionLine(line string) (ProxyConfig, error) {
 	switch {
 	case strings.HasPrefix(line, "ss://"):
 		return parseShadowsocks(line)
@@ -75,25 +75,16 @@ func parseSubscriptionLine(line string) (ProxyConfig, error) {
 
 // ── Fragment & name extraction ────────────────────────────────────────
 // fragment format: "JMS-746476@c702s1.portablesubmarines.com:15699"
-// Returns the name ("Server-1") and the hostname ("c702s1.portablesubmarines.com").
-func extractName(fragment string) (name, hostname string) {
+// Returns the hostname stripped of port as both name and server.
+func extractHostname(fragment string) string {
 	if idx := strings.LastIndex(fragment, "@"); idx >= 0 {
 		hostPart := fragment[idx+1:]
 		if ci := strings.Index(hostPart, ":"); ci >= 0 {
-			hostname = hostPart[:ci]
-		} else {
-			hostname = hostPart
+			return hostPart[:ci]
 		}
-		if dots := strings.Split(hostname, "."); len(dots) > 0 {
-			sub := dots[0] // "c702s1"
-			if si := strings.LastIndex(sub, "s"); si >= 0 && si+1 < len(sub) {
-				name = "Server-" + sub[si+1:]
-				return
-			}
-		}
+		return hostPart
 	}
-	name = fragment
-	return
+	return fragment
 }
 
 // ─── Shadowsocks ──────────────────────────────────────────────────
@@ -147,11 +138,9 @@ func parseShadowsocks(uri string) (ProxyConfig, error) {
 	}
 
 	if fragment != "" {
-		name, hostname := extractName(fragment)
-		px.Name = name
-		if hostname != "" {
-			px.Server = hostname
-		}
+		hn := extractHostname(fragment)
+		px.Server = hn
+		px.Name = hn
 	}
 	return px, nil
 }
@@ -192,11 +181,9 @@ func parseVMess(uri string) (ProxyConfig, error) {
 	}
 
 	if v.PS != "" {
-		name, hostname := extractName(v.PS)
-		px.Name = name
-		if hostname != "" {
-			px.Server = hostname
-		}
+		hn := extractHostname(v.PS)
+		px.Server = hn
+		px.Name = hn
 	}
 	return px, nil
 }
