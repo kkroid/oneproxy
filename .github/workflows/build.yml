@@ -19,18 +19,41 @@ jobs:
         with:
           go-version: '1.25'
 
-      - run: choco install innosetup --yes --no-progress
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
+          cache: true
 
-      - name: Build Go DLL
-        run: go build -buildmode=c-shared -o trayapp/build/oneproxy.dll ./cmd/oneproxy-dll
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Download sing-box
+        shell: pwsh
+        run: |
+          $version = '1.13.14'
+          $archive = Join-Path $env:RUNNER_TEMP "sing-box-$version.zip"
+          $extractDir = Join-Path $env:RUNNER_TEMP "sing-box-$version"
+          $url = "https://github.com/SagerNet/sing-box/releases/download/v$version/sing-box-$version-windows-amd64.zip"
+          $expectedHash = 'F580782C6DD10F7691C66CEA1D7C421813C5FBF7E305D1EE7CE0C3A40D196341'
+
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "sing-box archive hash mismatch: $actualHash"
+          }
+
+          Expand-Archive -Path $archive -DestinationPath $extractDir
+          $singBox = Get-ChildItem $extractDir -Filter sing-box.exe -Recurse | Select-Object -First 1
+          if (-not $singBox) { throw 'sing-box.exe not found in archive' }
+          Copy-Item $singBox.FullName bin\sing-box.exe
+
+      - name: Test
+        run: go test ./...
 
       - name: Build Installer
-        shell: cmd
-        run: |
-          copy configs\config.example.json trayapp\build\config-placeholder.json
-          copy trayapp\installer.iss trayapp\build\
-          cd trayapp\build
-          iscc installer.iss
+        shell: pwsh
+        run: .\build.ps1 -Installer
 
       - uses: actions/upload-artifact@v4
         with:

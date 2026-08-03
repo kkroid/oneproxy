@@ -14,10 +14,12 @@
 - Unknown proxy types are rejected during configuration validation.
 - English and Chinese documentation now match the runtime paths, routing rule-set files, and current DLL API.
 - `build.ps1 -Installer` now builds the setup package and no longer terminates running proxy processes.
+- Windows builds now discover their toolchains, compile rule sets from tracked JSON sources, and reproduce the installer in GitHub Actions.
 
 ### Removed
 
 - The Windows system-proxy toggle, including its registry writes and WinINet dependency. The previous implementation used a hard-coded port and could conflict with PAC or proxy settings owned by other applications.
+- Generated binaries, Qt deployment files, and compiled `.srs` rule sets from version control.
 
 ### Compatibility
 

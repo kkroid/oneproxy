@@ -39,14 +39,14 @@ Upstream Proxies (Shadowsocks / VMess / VLESS Reality)
 | **Go** | 1.25+ | Build DLL |
 | **MSVC** | 2022 | Build C++ tray |
 | **Qt** | 6.8+ | GUI framework |
-| **sing-box** | 1.13+ recommended | Proxy engine |
+| **sing-box** | 1.13.14 | Proxy engine and rule-set compiler |
 
 ### Installation
 
 #### 1. Download sing-box
 
 ```powershell
-# Download from https://github.com/SagerNet/sing-box/releases
+# Download sing-box 1.13.14 from https://github.com/SagerNet/sing-box/releases
 # Extract sing-box.exe to OneProxy/bin/
 mkdir bin
 # Place sing-box.exe in bin/
@@ -93,14 +93,14 @@ To import a subscription, copy its HTTP(S) URL and choose **Import Subscription 
 #### 3. Build
 
 ```powershell
-# One-command build (requires MSVC 2022 + Qt6 in PATH)
+# One-command build (requires Go, CMake, MSVC 2022, Qt 6.8.3, and sing-box.exe)
 .\build.ps1
 
 # Build the portable files and dist/OneProxy-0.6.0-setup.exe
 .\build.ps1 -Installer
 ```
 
-Build tool paths are documented in [`CLAUDE.md`](CLAUDE.md).
+The script discovers MSVC and Qt through `vswhere.exe` and `qmake.exe`. Custom locations can be passed with `-VcVars`, `-QtDir`, and `-InnoSetup`, or their `ONEPROXY_*` environment variables. Generated DLLs, executables, Qt deployment files, and `.srs` rule sets are intentionally not tracked by Git; the build recreates them from the tracked sources.
 
 #### 4. Run
 
@@ -250,10 +250,9 @@ Error: failed to start sing-box: exec: "bin/sing-box.exe": file does not exist
 ```
 Error: listen tcp 127.0.0.1:10801: bind: Only one usage of each socket address
 ```
-**Solution:** Another process is using the port. Change `local_port` in `config.json` or kill the conflicting process:
+**Solution:** Another process is using the port. Identify its owner, then change `local_port` in `config.json` or close the owning application deliberately. Do not terminate processes by name because they may belong to an active proxy session.
 ```powershell
 netstat -ano | findstr :10801
-taskkill /PID <PID> /F
 ```
 
 ### Health check always fails

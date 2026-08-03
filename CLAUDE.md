@@ -1,29 +1,28 @@
 # CLAUDE.md — OneProxy 项目开发规范
 
-## 环境信息
+## 构建环境
 
-- **OS**: Windows 11 Pro, x64
-- **Shell**: PowerShell (terminal), MSYS2 bash (Claude CLI 环境)
-- **Go**: 1.25+, available in both MSYS2 and Windows PATH
-- **MSVC**: VS 2022 Community, vcvars64.bat at `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\`
-- **Qt6**: 6.8.3 MSVC 2022, at `C:\Qt\6.8.3\msvc2022_64\`
-- **CMake**: at `D:\cmake-3.30.4-windows-x86_64\bin\cmake.exe`
-- **Python**: miniconda3 at `C:\Users\kkroid\miniconda3\python.exe`
-- **Inno Setup 6**: at `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`
-- **Git**: available
+- **OS**: Windows 10/11, x64
+- **Go**: 1.25+
+- **MSVC**: Visual Studio 2022 C++ build tools
+- **Qt6**: 6.8.3, MSVC 2022 x64
+- **CMake**: available in PATH
+- **Inno Setup**: 6（仅安装包构建需要）
+- **sing-box**: 1.13.14，放在 `bin\sing-box.exe`
+
+`build.ps1` 会通过 `vswhere.exe` 和 `qmake.exe` 查找 MSVC 与 Qt。非标准安装路径使用 `-VcVars`、`-QtDir`、`-InnoSetup` 参数或对应的 `ONEPROXY_*` 环境变量。
 
 ## 关键规则
 
 ### 1. 编译必须自己验证通过才能交给用户
-- DLL 测试：`go build -buildmode=c-shared` → 复制到 trayapp/build → `python3 -c` 加载 DLL → Start → curl 验证端口 → Stop
-- `taskkill //F //IM sing-box.exe` 清理副作用
-- 不要把"编译通过"等同于"能工作"
+- 运行 `go test ./...`、`go vet ./...` 和 `build.ps1 -Installer`
+- 核对安装包版本、哈希与构建前后的现有代理 PID
+- 不要把“编译通过”等同于“用户已完成安装验证”
 
-### 2. 测试必须端到端
-- DLL 级别：同上
-- 便携模式：`.\trayapp\build\oneproxy-tray.exe` 从项目根启动
-- 安装模式：先便携验证通过 → 打包 installer → 安装到 Program Files → 再次验证
-- 两种模式的 cwd 和写权限完全不同
+### 2. 不干扰现有代理
+- 构建和打包不得停止、重启或安装 OneProxy
+- 不得按进程名批量终止 `oneproxy-tray.exe` 或 `sing-box.exe`
+- 运行态验证和安装由明确负责验证的人执行
 
 ### 3. 任何报错，先查日志
 - `~/.oneproxy/logs/singbox.log` 是第一优先级
@@ -52,22 +51,23 @@
 ## 构建流程
 
 ```powershell
-.\build.ps1                         # 编译 DLL + tray + windeployqt
-cp trayapp\installer.iss trayapp\build\
-& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' trayapp\build\installer.iss
+.\build.ps1             # 编译规则集、DLL、tray，并运行 windeployqt
+.\build.ps1 -Installer  # 额外生成安装包
 # 输出: dist\OneProxy-0.6.0-setup.exe
 ```
+
+生成的 DLL、EXE、Qt 部署目录和 `.srs` 规则集不进入版本控制。GitHub Actions 会下载并校验固定版本的 sing-box，然后使用同一个 `build.ps1` 构建。
 
 ## 调试检查清单
 
 - [ ] 报错时先查 `~/.oneproxy/logs/singbox.log`
 - [ ] `grep server ~/.oneproxy/singbox_generated.json` 确认用的是真实配置而非示例
-- [ ] 先便携模式验证，再安装模式测试
+- [ ] 构建前后现有代理 PID 保持不变
 - [ ] 安装后 config.json 在 `~/.oneproxy/`，不在 Program Files
 
 ## 已知陷阱
 
-- **端口占用**: 每次启动前先 kill 残留进程
+- **端口占用**: 不要终止现有代理；改用未占用端口或由用户安排运行态验证
 - **ctypes c_char_p**: 用 `restype = ctypes.c_void_p`，不能 `c_char_p`
 - **MSVC 环境**: cmake/nmake 必须在 vcvars 激活的 cmd session 中
 - **Program Files 不可写**: 所有运行时产物写到 `~/.oneproxy/`

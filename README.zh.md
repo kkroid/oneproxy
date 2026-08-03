@@ -41,14 +41,14 @@ Windows 多端口代理聚合器 — 将 Shadowsocks、VMess 和 VLESS Reality �
 | **Go** | 1.25+ | 构建 DLL |
 | **MSVC** | 2022 | 构建 C++ 托盘 |
 | **Qt** | 6.8+ | GUI 框架 |
-| **sing-box** | 推荐 1.13+ | 代理引擎 |
+| **sing-box** | 1.13.14 | 代理引擎及规则集编译器 |
 
 ### 安装
 
 #### 1. 下载 sing-box
 
 ```powershell
-# 从 https://github.com/SagerNet/sing-box/releases 下载
+# 从 https://github.com/SagerNet/sing-box/releases 下载 sing-box 1.13.14
 # 将 sing-box.exe 解压到 OneProxy/bin/
 mkdir bin
 # 将 sing-box.exe 放入 bin/
@@ -95,14 +95,14 @@ VLESS Reality 配置示例：
 #### 3. 构建
 
 ```powershell
-# 一键构建（需要 MSVC 2022 + Qt6 在 PATH 中）
+# 一键构建（需要 Go、CMake、MSVC 2022、Qt 6.8.3 和 sing-box.exe）
 .\build.ps1
 
 # 构建便携文件和 dist/OneProxy-0.6.0-setup.exe
 .\build.ps1 -Installer
 ```
 
-构建工具路径与验证流程见 [`CLAUDE.md`](CLAUDE.md)。
+脚本通过 `vswhere.exe` 和 `qmake.exe` 自动查找 MSVC 与 Qt。自定义位置可使用 `-VcVars`、`-QtDir`、`-InnoSetup` 参数，或对应的 `ONEPROXY_*` 环境变量。生成的 DLL、可执行文件、Qt 部署文件和 `.srs` 规则集不会提交到 Git，构建时会从已跟踪的源码重新生成。
 
 #### 4. 运行
 
@@ -246,10 +246,9 @@ Error: failed to start sing-box: exec: "bin/sing-box.exe": file does not exist
 ```
 Error: listen tcp 127.0.0.1:10801: bind: Only one usage of each socket address
 ```
-**解决方案：** 其他进程正在使用该端口。修改 `config.json` 中的 `local_port` 或终止冲突进程：
+**解决方案：** 其他进程正在使用该端口。先确认占用者，再修改 `config.json` 中的 `local_port`，或有意识地关闭对应应用。不要按进程名批量终止，它可能属于正在使用的代理会话。
 ```powershell
 netstat -ano | findstr :10801
-taskkill /PID <PID> /F
 ```
 
 ### 健康检查总是失败
