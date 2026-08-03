@@ -23,10 +23,6 @@ if ($Clean) {
     exit 0
 }
 
-Get-Process oneproxy-tray -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Get-Process sing-box -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-
 Push-Location $root
 
 # 1. Go DLL
@@ -92,6 +88,19 @@ foreach ($f in @("oneproxy-tray.exe","oneproxy.dll","Qt6Gui.dll","Qt6Widgets.dll
 if ($missing.Count -gt 0) {
     Write-Host "WARNING: missing: $missing" -ForegroundColor Yellow
     Pop-Location; throw "Deployment incomplete"
+}
+
+if ($Installer) {
+    if (-not (Test-Path $innoSetup)) {
+        Pop-Location
+        throw "Inno Setup not found: $innoSetup"
+    }
+    Copy-Item -Force "$root\trayapp\installer.iss" "$buildDir\installer.iss"
+    & $innoSetup "$buildDir\installer.iss"
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "Installer build failed"
+    }
 }
 
 Pop-Location

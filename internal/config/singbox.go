@@ -81,6 +81,35 @@ type VMessOutbound struct {
 	Security   string `json:"security"`
 }
 
+// VLESSOutbound configuration for TCP + Reality + XTLS Vision.
+type VLESSOutbound struct {
+	Type       string             `json:"type"`
+	Tag        string             `json:"tag"`
+	Server     string             `json:"server"`
+	ServerPort int                `json:"server_port"`
+	UUID       string             `json:"uuid"`
+	Flow       string             `json:"flow"`
+	TLS        OutboundTLSOptions `json:"tls"`
+}
+
+type OutboundTLSOptions struct {
+	Enabled    bool                   `json:"enabled"`
+	ServerName string                 `json:"server_name"`
+	UTLS       OutboundUTLSOptions    `json:"utls"`
+	Reality    OutboundRealityOptions `json:"reality"`
+}
+
+type OutboundUTLSOptions struct {
+	Enabled     bool   `json:"enabled"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+type OutboundRealityOptions struct {
+	Enabled   bool   `json:"enabled"`
+	PublicKey string `json:"public_key"`
+	ShortID   string `json:"short_id"`
+}
+
 // DirectOutbound configuration
 type DirectOutbound struct {
 	Type string `json:"type"`
@@ -154,7 +183,7 @@ type SingBoxGenerator struct {
 }
 
 // NewSingBoxGenerator creates a new generator. baseDir is the directory
-// containing the bin/ folder with geoip.db/geosite.db.
+// containing the bin/ folder with geoip-cn.srs/geosite-cn.srs.
 func NewSingBoxGenerator(cfg *Config, baseDir string) *SingBoxGenerator {
 	return &SingBoxGenerator{userConfig: cfg, baseDir: baseDir}
 }
@@ -249,6 +278,21 @@ func (g *SingBoxGenerator) generateOutbounds() []interface{} {
 				Type: "vmess", Tag: tag,
 				Server: proxy.Server, ServerPort: proxy.Port,
 				UUID: proxy.UUID, AlterID: proxy.AlterID, Security: proxy.Security,
+			})
+		case "vless":
+			outbounds = append(outbounds, VLESSOutbound{
+				Type: "vless", Tag: tag,
+				Server: proxy.Server, ServerPort: proxy.Port,
+				UUID: proxy.UUID, Flow: proxy.Flow,
+				TLS: OutboundTLSOptions{
+					Enabled: true, ServerName: proxy.ServerName,
+					UTLS: OutboundUTLSOptions{
+						Enabled: true, Fingerprint: proxy.Fingerprint,
+					},
+					Reality: OutboundRealityOptions{
+						Enabled: true, PublicKey: proxy.RealityPublicKey, ShortID: proxy.RealityShortID,
+					},
+				},
 			})
 		}
 	}

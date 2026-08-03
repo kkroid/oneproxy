@@ -43,18 +43,23 @@ type DNSConfig struct {
 
 // ProxyConfig represents a single proxy server configuration
 type ProxyConfig struct {
-	Name      string                 `json:"name"`
-	Enabled   bool                   `json:"enabled"`
-	LocalPort int                    `json:"local_port"`         // local port to expose this proxy
-	Type      string                 `json:"type"`               // shadowsocks, vmess, trojan, etc.
-	Server    string                 `json:"server"`
-	Port      int                    `json:"port"`
-	Method    string                 `json:"method,omitempty"`   // for shadowsocks
-	Password  string                 `json:"password,omitempty"` // for shadowsocks, trojan
-	UUID      string                 `json:"uuid,omitempty"`     // for vmess
-	AlterID   int                    `json:"alter_id,omitempty"` // for vmess
-	Security  string                 `json:"security,omitempty"` // for vmess
-	Extra     map[string]interface{} `json:"extra,omitempty"`    // for additional fields
+	Name             string                 `json:"name"`
+	Enabled          bool                   `json:"enabled"`
+	LocalPort        int                    `json:"local_port"` // local port to expose this proxy
+	Type             string                 `json:"type"`       // shadowsocks, vmess, vless
+	Server           string                 `json:"server"`
+	Port             int                    `json:"port"`
+	Method           string                 `json:"method,omitempty"`             // for shadowsocks
+	Password         string                 `json:"password,omitempty"`           // for shadowsocks
+	UUID             string                 `json:"uuid,omitempty"`               // for vmess/vless
+	AlterID          int                    `json:"alter_id,omitempty"`           // for vmess
+	Security         string                 `json:"security,omitempty"`           // for vmess/vless
+	Flow             string                 `json:"flow,omitempty"`               // for vless
+	ServerName       string                 `json:"server_name,omitempty"`        // for vless reality
+	Fingerprint      string                 `json:"fingerprint,omitempty"`        // for vless reality uTLS
+	RealityPublicKey string                 `json:"reality_public_key,omitempty"` // for vless reality
+	RealityShortID   string                 `json:"reality_short_id,omitempty"`   // for vless reality
+	Extra            map[string]interface{} `json:"extra,omitempty"`              // for additional fields
 }
 
 // InboundConfig represents local listening configuration
@@ -156,6 +161,18 @@ func (c *Config) Validate() error {
 			if proxy.UUID == "" {
 				return fmt.Errorf("proxy %s: uuid is required", proxy.Name)
 			}
+		case "vless":
+			if proxy.UUID == "" {
+				return fmt.Errorf("proxy %s: uuid is required", proxy.Name)
+			}
+			if proxy.Security != "reality" || proxy.Flow != "xtls-rprx-vision" {
+				return fmt.Errorf("proxy %s: only VLESS Reality with XTLS Vision is supported", proxy.Name)
+			}
+			if proxy.ServerName == "" || proxy.Fingerprint == "" || proxy.RealityPublicKey == "" || proxy.RealityShortID == "" {
+				return fmt.Errorf("proxy %s: incomplete VLESS Reality configuration", proxy.Name)
+			}
+		default:
+			return fmt.Errorf("proxy %s: unsupported type %q", proxy.Name, proxy.Type)
 		}
 	}
 

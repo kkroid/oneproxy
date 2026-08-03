@@ -4,7 +4,7 @@
 
 - **OS**: Windows 11 Pro, x64
 - **Shell**: PowerShell (terminal), MSYS2 bash (Claude CLI 环境)
-- **Go**: 1.21+, available in both MSYS2 and Windows PATH
+- **Go**: 1.25+, available in both MSYS2 and Windows PATH
 - **MSVC**: VS 2022 Community, vcvars64.bat at `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\`
 - **Qt6**: 6.8.3 MSVC 2022, at `C:\Qt\6.8.3\msvc2022_64\`
 - **CMake**: at `D:\cmake-3.30.4-windows-x86_64\bin\cmake.exe`
@@ -55,7 +55,7 @@
 .\build.ps1                         # 编译 DLL + tray + windeployqt
 cp trayapp\installer.iss trayapp\build\
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' trayapp\build\installer.iss
-# 输出: dist\OneProxy-0.5.0-setup.exe
+# 输出: dist\OneProxy-0.6.0-setup.exe
 ```
 
 ## 调试检查清单

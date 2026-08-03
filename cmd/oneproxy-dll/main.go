@@ -24,6 +24,8 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
+const appVersion = "0.6.0"
+
 var (
 	gManager       *proxy.Manager
 	gHealthChecker *proxy.HealthChecker
@@ -160,7 +162,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 		gLogger, _ = logger.New(filepath.Join(dataDir, "logs", "oneproxy.log"), 10, 3)
 	}
 	if gLogger != nil {
-		gLogger.Info("OneProxy v0.5.0 starting, route=%s, proxies=%d, port=%d",
+		gLogger.Info("OneProxy v%s starting, route=%s, proxies=%d, port=%d", appVersion,
 			cfg.RouteMode, len(cfg.GetEnabledProxies()), cfg.Unified.Port)
 	}
 
@@ -381,7 +383,7 @@ func OneProxy_ImportConfig(input *C.char) *C.char {
 		if err != nil {
 			return errStr(fmt.Errorf("fetch subscription: %w", err))
 		}
-	case strings.HasPrefix(raw, "ss://"), strings.HasPrefix(raw, "vmess://"):
+	case strings.HasPrefix(raw, "ss://"), strings.HasPrefix(raw, "vmess://"), strings.HasPrefix(raw, "vless://"):
 		px, err := config.ParseSubscriptionLine(raw)
 		if err != nil {
 			return errStr(fmt.Errorf("invalid proxy URL: %w", err))
@@ -512,7 +514,7 @@ func OneProxy_SelectProxy(proxyName *C.char) *C.char {
 }
 
 //export OneProxy_GetVersion
-func OneProxy_GetVersion() *C.char { return C.CString("0.5.0") }
+func OneProxy_GetVersion() *C.char { return C.CString(appVersion) }
 
 //export OneProxy_FreeString
 func OneProxy_FreeString(s *C.char) { C.free(unsafe.Pointer(s)) }

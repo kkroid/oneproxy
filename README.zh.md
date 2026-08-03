@@ -1,17 +1,17 @@
 # OneProxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Qt Version](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
 > [English](README.md) | 简体中文
 
-Windows 多端口代理聚合器 — 将多个上游代理节点（Shadowsocks/VMess）转换为独立的本地 SOCKS5 端口，通过原生 C++ Qt6 系统托盘 GUI 管理。
+Windows 多端口代理聚合器 — 将 Shadowsocks、VMess 和 VLESS Reality 上游节点转换为独立的本地混合代理端口（SOCKS5 + HTTP CONNECT），通过原生 C++ Qt6 系统托盘 GUI 管理。
 
 ## 架构
 
 ```
-上游代理 (Shadowsocks/VMess)
+上游代理 (Shadowsocks / VMess / VLESS Reality)
         │
         ▼
   oneproxy.dll  ←─── Go 核心：配置解析、sing-box 管理、健康检查、DNS 刷新
@@ -22,29 +22,12 @@ Windows 多端口代理聚合器 — 将多个上游代理节点（Shadowsocks/V
 ```
 
 **核心特性：**
-- 🎯 **多端口映射** — 每个上游节点 → 独立本地 SOCKS5 端口（如 :10801, :10802...）
+- 🎯 **多端口映射** — 每个上游节点 → 独立本地 SOCKS5 + HTTP 端口（如 :10801, :10802...）
+- 🔐 **VLESS Reality** — 支持 TCP + Reality + XTLS Vision 订阅
 - 🩺 **健康监控** — 自动延迟检查，可视化状态指示
 - 🔄 **DNS 管理** — 故障时自动刷新系统 DNS + 重启 sing-box
 - 🪟 **原生 GUI** — Qt6 系统托盘，无控制台窗口，轻量（~2 MB）
 - ⚙️ **基于 sing-box** — 久经考验的代理核心，支持多种协议
-
----
-
-## 截图
-
-### 系统托盘菜单
-<kbd>![托盘菜单](docs/screenshots/tray-menu.png)</kbd>
-
-显示所有代理：
-- ✓ 健康状态（绿/黄/红指示器）
-- 端口号和延迟（毫秒）
-- 启动/停止/重启控制
-- 手动健康检查和 DNS 刷新触发器
-
-### 健康检查运行中
-<kbd>![健康状态](docs/screenshots/health-status.png)</kbd>
-
-每 60 秒自动后台检查（可配置）。失败节点触发 DNS 刷新和重试。
 
 ---
 
@@ -55,10 +38,10 @@ Windows 多端口代理聚合器 — 将多个上游代理节点（Shadowsocks/V
 | 组件 | 版本 | 用途 |
 |------|------|------|
 | **Windows** | 10/11 | 目标操作系统 |
-| **Go** | 1.21+ | 构建 DLL |
+| **Go** | 1.25+ | 构建 DLL |
 | **MSVC** | 2022 | 构建 C++ 托盘 |
 | **Qt** | 6.8+ | GUI 框架 |
-| **sing-box** | 最新版 | 代理引擎 |
+| **sing-box** | 推荐 1.13+ | 代理引擎 |
 
 ### 安装
 
@@ -81,35 +64,45 @@ cp configs\config.example.json config.json
 notepad config.json
 ```
 
-配置示例：
+VLESS Reality 配置示例：
 
 ```json
 {
   "proxies": [
     {
-      "name": "美国节点-1",
+      "name": "Reality-节点-1",
       "enabled": true,
       "local_port": 10801,
-      "type": "shadowsocks",
-      "server": "us1.example.com",
-      "port": 8388,
-      "method": "aes-256-gcm",
-      "password": "你的实际密码"
+      "type": "vless",
+      "server": "edge.example.com",
+      "port": 443,
+      "uuid": "你的-vless-uuid",
+      "security": "reality",
+      "flow": "xtls-rprx-vision",
+      "server_name": "www.example.com",
+      "fingerprint": "chrome",
+      "reality_public_key": "你的-reality-public-key",
+      "reality_short_id": "0123456789abcdef"
     }
   ]
 }
 ```
 
-完整配置参考见 [docs/configuration.zh.md](docs/configuration.zh.md)。
+所有支持协议的示例见 [`configs/config.example.json`](configs/config.example.json)。VLESS 当前有意限定为 TCP + Reality + XTLS Vision。
+
+如需导入订阅，复制 HTTP(S) 订阅地址，然后在托盘菜单选择 **从剪贴板导入订阅**。
 
 #### 3. 构建
 
 ```powershell
 # 一键构建（需要 MSVC 2022 + Qt6 在 PATH 中）
 .\build.ps1
+
+# 构建便携文件和 dist/OneProxy-0.6.0-setup.exe
+.\build.ps1 -Installer
 ```
 
-如果构建失败，参见 [docs/installation.zh.md](docs/installation.zh.md) 手动设置。
+构建工具路径与验证流程见 [`CLAUDE.md`](CLAUDE.md)。
 
 #### 4. 运行
 
@@ -144,10 +137,6 @@ curl -x socks5://127.0.0.1:10801 https://ip.sb
 chrome.exe --proxy-server="socks5://127.0.0.1:10801"
 ```
 
-**系统全局代理（Windows）：**
-1. 设置 → 网络和 Internet → 代理
-2. 手动设置 → SOCKS 代理：`127.0.0.1:10801`
-
 ### 托盘菜单操作
 
 | 操作 | 效果 |
@@ -157,6 +146,8 @@ chrome.exe --proxy-server="socks5://127.0.0.1:10801"
 | **重启所有代理** | 重启 + 触发健康检查 |
 | **立即检查所有节点** | 手动健康检查（跳过 60 秒间隔） |
 | **立即刷新 DNS** | 刷新系统 DNS + 重启 sing-box |
+| **代理模式** | 选择全局、规则或直连模式 |
+| **从剪贴板导入订阅** | 导入 HTTP(S)、SS、VMess 或 VLESS |
 | **退出** | 停止代理并退出程序 |
 
 **图标颜色：**
@@ -166,59 +157,16 @@ chrome.exe --proxy-server="socks5://127.0.0.1:10801"
 
 ---
 
-## HTTP/HTTPS 代理支持
+## SOCKS5 与 HTTP CONNECT
 
-OneProxy 默认提供 **SOCKS5** 代理。如需 **HTTP/HTTPS** 代理：
-
-### 方法 1：修改配置（推荐）
-
-编辑 `config.json`，将 `inbound.proxy_type` 改为 `http`：
-
-```json
-{
-  "inbound": {
-    "listen": "127.0.0.1",
-    "proxy_type": "http"
-  }
-}
-```
-
-重启代理后，所有端口变为 HTTP CONNECT 代理：
+每个本地端口都是 sing-box `mixed` 入站，同时接受 SOCKS5 和 HTTP CONNECT，无需切换配置：
 
 ```powershell
 # 测试 HTTP 代理
 curl -x http://127.0.0.1:10801 https://ip.sb
-
-# 浏览器设置
-# Firefox: HTTP 代理 127.0.0.1:10801
-# Chrome: --proxy-server="http://127.0.0.1:10801"
 ```
 
-### 方法 2：混合模式
-
-在 `config.json` 中为每个代理单独设置：
-
-```json
-{
-  "proxies": [
-    {
-      "name": "SOCKS5-Node",
-      "local_port": 10801,
-      "inbound_type": "socks5"  // 此端口为 SOCKS5
-    },
-    {
-      "name": "HTTP-Node",
-      "local_port": 10802,
-      "inbound_type": "http"    // 此端口为 HTTP
-    }
-  ]
-}
-```
-
-**注意：** 
-- HTTP 代理**不支持 UDP**（如 DNS 查询），SOCKS5 支持
-- 部分应用（如 Telegram）仅支持 SOCKS5
-- 性能：SOCKS5 略优（协议更简单）
+OneProxy 不再修改 Windows 系统代理。请在应用或浏览器中配置本地端口，避免覆盖 PAC 文件或其他代理客户端的设置。
 
 ### 路由模式
 
@@ -226,18 +174,20 @@ OneProxy 支持三种路由模式，通过托盘菜单切换：
 
 | 模式 | 行为 |
 |------|------|
-| **全局** | 所有流量走代理（默认） |
-| **规则** | 国内 IP/域名直连，其他走代理 |
-| **直连** | 所有流量直连，不走代理 |
+| **全局** | 统一端口的所有流量走当前选择的代理（默认） |
+| **规则** | 统一端口的国内 IP/域名直连，其他流量走代理 |
+| **直连** | 统一端口的所有流量直连 |
+
+每个节点的独立端口始终固定使用对应的上游节点。
 
 规则模式使用 sing-box 内置的 `rule_set` 路由功能，搭配社区维护的数据库：
 
 | 数据库 | 大小 | 用途 |
 |--------|------|------|
-| `geoip.db` | 4 MB | IP 地址 → 国家/地区映射 |
-| `geosite.db` | 3.5 MB | 域名 → 分类（cn、ads 等） |
+| `geoip-cn.srs` | 中国 IP 段 | 中国 IP → 直连 |
+| `geosite-cn.srs` | 中国域名规则 | 中国域名 → 直连 |
 
-这些数据库由 [SagerNet 社区](https://github.com/SagerNet/sing-geoip/releases) 维护，可独立更新。启动时自动复制到 `~/.oneproxy/` 目录。
+规则集直接从安装目录的 `bin/` 加载，并由安装包一并部署。
 
 这是**服务端路由**，对所有经过代理的应用生效，与 PAC 脚本仅在浏览器层面工作不同。
 
@@ -273,6 +223,10 @@ char* OneProxy_Restart();
 char* OneProxy_Status();                    // JSON 字符串
 char* OneProxy_HealthCheck();
 char* OneProxy_FlushDNS();
+char* OneProxy_SelectProxy(char* proxyName);
+char* OneProxy_ExportConfig();
+char* OneProxy_ImportConfig(char* input);
+char* OneProxy_GetVersion();
 void  OneProxy_FreeString(char* ptr);       // 释放返回的字符串
 ```
 
@@ -310,7 +264,7 @@ taskkill /PID <PID> /F
 
 查看日志：
 ```powershell
-type logs\singbox.log
+type %USERPROFILE%\.oneproxy\logs\singbox.log
 ```
 
 ### 托盘图标不显示
@@ -322,10 +276,6 @@ cd trayapp\build
 # 查看控制台输出
 ```
 
-更多问题？见 [docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
-
----
-
 ## 项目结构
 
 ```
@@ -336,6 +286,7 @@ OneProxy/
 ├── internal/
 │   ├── config/            # 配置解析器 + sing-box 配置生成器
 │   │   ├── config.go      # JSON 反序列化、验证
+│   │   ├── subscription.go # SS、VMess、VLESS 订阅解析
 │   │   └── singbox.go     # 从配置生成 sing-box JSON
 │   └── proxy/             # 核心代理管理
 │       ├── manager.go     # 进程生命周期，Start/Stop/Restart
@@ -348,21 +299,15 @@ OneProxy/
 ├── configs/
 │   └── config.example.json
 ├── bin/                   # sing-box 二进制（用户提供）
-├── logs/                  # sing-box 标准输出/错误
 ├── build.ps1              # 一键构建脚本
-└── config.json            # 用户配置（已忽略）
+└── config-placeholder.json # 安全的首次运行模板
 ```
 
 ---
 
 ## 开发
 
-参见 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)：
-- 开发环境设置
-- 构建系统详解（Go 构建模式、Qt/CMake、MSVC 工具链）
-- 代码结构和约定
-- 运行测试
-- 提交 PR
+构建前运行 `go test ./...` 和 `go vet ./...`。Windows 工具链路径及端到端验证清单见 [`CLAUDE.md`](CLAUDE.md)。
 
 ---
 
@@ -384,7 +329,7 @@ OneProxy/
 trayapp/build/
 ├── oneproxy-tray.exe
 ├── oneproxy.dll
-├── config.json              # 你的代理配置
+├── config-placeholder.json  # 安全的首次运行模板
 ├── green.ico, yellow.ico, red.ico
 ├── Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll
 ├── platforms/
@@ -393,9 +338,7 @@ trayapp/build/
     └── sing-box.exe         # 代理引擎
 ```
 
-**可选：**
-- `oneproxy.exe` — CLI 工具
-- `logs/` — 自动创建用于 sing-box 输出
+运行时配置和日志保存在 `%USERPROFILE%\.oneproxy\`。
 
 ---
 
@@ -422,7 +365,7 @@ A: OneProxy 将每个节点暴露为独立端口，支持按应用路由代理�
 A: Go DLL 核心跨平台，但 Qt 托盘应用目前仅支持 Windows。欢迎提交其他平台的 PR。
 
 **Q: 可以用 HTTP 代理代替 SOCKS5 吗？**  
-A: 可以。修改 `config.json` → `inbound` → `proxy_type` 为 `"http"`。sing-box 会在相同端口上创建 HTTP CONNECT 代理。
+A: 可以。OneProxy 的每个本地端口都同时接受 SOCKS5 和 HTTP CONNECT。
 
 **Q: 如何添加新的代理节点？**  
 A: 编辑 `config.json`，在 `proxies` 数组中添加新条目，指定唯一的 `local_port`，从托盘菜单重启。

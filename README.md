@@ -1,15 +1,15 @@
 # OneProxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Qt Version](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
-Multi-port proxy aggregator for Windows — converts multiple upstream proxy nodes (Shadowsocks/VMess) into independent local SOCKS5 ports, managed via a native C++ Qt6 system-tray GUI.
+Multi-port proxy aggregator for Windows — converts Shadowsocks, VMess, and VLESS Reality upstream nodes into independent local mixed proxy ports (SOCKS5 + HTTP CONNECT), managed through a native C++ Qt6 system-tray GUI.
 
 ## Architecture
 
 ```
-Upstream Proxies (Shadowsocks/VMess)
+Upstream Proxies (Shadowsocks / VMess / VLESS Reality)
         │
         ▼
   oneproxy.dll  ←─── Go core: config parser, sing-box manager, health check, DNS flush
@@ -20,29 +20,12 @@ Upstream Proxies (Shadowsocks/VMess)
 ```
 
 **Key Features:**
-- 🎯 **Multi-port mapping** — Each upstream node → dedicated local SOCKS5 port (e.g., :10801, :10802...)
+- 🎯 **Multi-port mapping** — Each upstream node → dedicated local SOCKS5 + HTTP port (e.g., :10801, :10802...)
+- 🔐 **VLESS Reality** — Supports TCP + Reality + XTLS Vision subscriptions
 - 🩺 **Health monitoring** — Automatic latency checks, visual status indicators
 - 🔄 **DNS management** — Auto-flush system DNS + sing-box restart on failures
 - 🪟 **Native GUI** — Qt6 system tray, no console windows, lightweight (~2 MB)
 - ⚙️ **Powered by sing-box** — Battle-tested proxy core with protocol diversity
-
----
-
-## Screenshots
-
-### System Tray Menu
-<kbd>![Tray Menu](docs/screenshots/tray-menu.png)</kbd>
-
-Shows all proxies with:
-- ✓ Health status (green/yellow/red indicators)
-- Port numbers and latency in ms
-- Start/Stop/Restart controls
-- Manual health check and DNS flush triggers
-
-### Health Check in Action
-<kbd>![Health Status](docs/screenshots/health-status.png)</kbd>
-
-Automatic background checks every 60s (configurable). Failed nodes trigger DNS flush and retry.
 
 ---
 
@@ -53,10 +36,10 @@ Automatic background checks every 60s (configurable). Failed nodes trigger DNS f
 | Component | Version | Purpose |
 |-----------|---------|---------|
 | **Windows** | 10/11 | Target OS |
-| **Go** | 1.21+ | Build DLL |
+| **Go** | 1.25+ | Build DLL |
 | **MSVC** | 2022 | Build C++ tray |
 | **Qt** | 6.8+ | GUI framework |
-| **sing-box** | Latest | Proxy engine |
+| **sing-box** | 1.13+ recommended | Proxy engine |
 
 ### Installation
 
@@ -79,35 +62,45 @@ cp configs\config.example.json config.json
 notepad config.json
 ```
 
-Example configuration:
+Example VLESS Reality configuration:
 
 ```json
 {
   "proxies": [
     {
-      "name": "US-Node-1",
+      "name": "Reality-Node-1",
       "enabled": true,
       "local_port": 10801,
-      "type": "shadowsocks",
-      "server": "us1.example.com",
-      "port": 8388,
-      "method": "aes-256-gcm",
-      "password": "your-actual-password"
+      "type": "vless",
+      "server": "edge.example.com",
+      "port": 443,
+      "uuid": "your-vless-uuid",
+      "security": "reality",
+      "flow": "xtls-rprx-vision",
+      "server_name": "www.example.com",
+      "fingerprint": "chrome",
+      "reality_public_key": "your-reality-public-key",
+      "reality_short_id": "0123456789abcdef"
     }
   ]
 }
 ```
 
-See [docs/configuration.md](docs/configuration.md) for full reference.
+See [`configs/config.example.json`](configs/config.example.json) for examples of all supported protocols. VLESS support is intentionally limited to TCP + Reality + XTLS Vision.
+
+To import a subscription, copy its HTTP(S) URL and choose **Import Subscription from Clipboard** from the tray menu.
 
 #### 3. Build
 
 ```powershell
 # One-command build (requires MSVC 2022 + Qt6 in PATH)
 .\build.ps1
+
+# Build the portable files and dist/OneProxy-0.6.0-setup.exe
+.\build.ps1 -Installer
 ```
 
-If build fails due to missing paths, see [docs/installation.md](docs/installation.md) for manual setup.
+Build tool paths are documented in [`CLAUDE.md`](CLAUDE.md).
 
 #### 4. Run
 
@@ -142,63 +135,16 @@ curl -x socks5://127.0.0.1:10801 https://ip.sb
 chrome.exe --proxy-server="socks5://127.0.0.1:10801"
 ```
 
-**System-wide (Windows):**
-1. Settings → Network & Internet → Proxy
-2. Manual setup → SOCKS proxy: `127.0.0.1:10801`
+### SOCKS5 and HTTP CONNECT
 
-### HTTP/HTTPS Proxy Support
-
-OneProxy defaults to **SOCKS5** proxies. To use **HTTP/HTTPS** proxies instead:
-
-#### Method 1: Change Global Type (Recommended)
-
-Edit `config.json` and set `inbound.proxy_type` to `http`:
-
-```json
-{
-  "inbound": {
-    "listen": "127.0.0.1",
-    "proxy_type": "http"
-  }
-}
-```
-
-After restarting, all ports become HTTP CONNECT proxies:
+Every local port is a sing-box `mixed` inbound and accepts both SOCKS5 and HTTP CONNECT. No protocol switch is required:
 
 ```powershell
 # Test HTTP proxy
 curl -x http://127.0.0.1:10801 https://ip.sb
-
-# Browser configuration
-# Firefox: HTTP Proxy 127.0.0.1:10801
-# Chrome: --proxy-server="http://127.0.0.1:10801"
 ```
 
-#### Method 2: Mixed Mode
-
-Set different types per proxy in `config.json`:
-
-```json
-{
-  "proxies": [
-    {
-      "name": "SOCKS5-Node",
-      "local_port": 10801,
-      "inbound_type": "socks5"  // This port is SOCKS5
-    },
-    {
-      "name": "HTTP-Node",
-      "local_port": 10802,
-      "inbound_type": "http"    // This port is HTTP
-    }
-  ]
-}
-```
-
-**Trade-offs:**
-- HTTP proxies **do not support UDP** (e.g., DNS queries), SOCKS5 does
-- Some applications (e.g., Telegram) only support SOCKS5
-- Performance: SOCKS5 is slightly faster (simpler protocol)
+OneProxy intentionally does not change Windows system proxy settings. Configure the local port in each application or browser to avoid interfering with PAC files and other proxy clients.
 
 ### Routing Modes
 
@@ -206,18 +152,20 @@ OneProxy supports three routing modes, selectable from the tray menu:
 
 | Mode | Behavior |
 |------|----------|
-| **Global** | All traffic goes through the proxy (default) |
-| **Rule** | China IPs/domains → direct, everything else → proxy |
-| **Direct** | All traffic goes directly, proxy bypassed |
+| **Global** | Unified port sends all traffic through the selected proxy (default) |
+| **Rule** | Unified port sends China IPs/domains direct and other traffic through the proxy |
+| **Direct** | Unified port sends all traffic directly |
+
+Individual node ports always remain pinned to their corresponding upstream node.
 
 Rule mode uses sing-box's built-in `rule_set` router with community-maintained databases:
 
 | Database | Size | Purpose |
 |----------|------|---------|
-| `geoip.db` | 4 MB | IP address → country mapping |
-| `geosite.db` | 3.5 MB | Domain → category mapping (cn, ads, etc.) |
+| `geoip-cn.srs` | China IP ranges | China IPs → direct |
+| `geosite-cn.srs` | China domain rules | China domains → direct |
 
-These databases are maintained by the [SagerNet community](https://github.com/SagerNet/sing-geoip/releases) and can be updated independently by replacing the files in `bin/`. They are automatically copied to `~/.oneproxy/` on startup.
+The rule sets are loaded from the installation's `bin/` directory and packaged by the installer.
 
 **Rule mode decision flow:**
 ```
@@ -233,12 +181,14 @@ This is **server-side routing** — it affects all traffic passing through the p
 
 | Action | Effect |
 |--------|--------|
-| **启动所有代理** | Start all enabled proxies |
-| **停止所有代理** | Stop sing-box, close all ports |
-| **重启所有代理** | Restart + trigger health check |
-| **立即检查所有节点** | Manual health check (bypasses 60s interval) |
-| **立即刷新 DNS** | Flush system DNS + restart sing-box |
-| **退出** | Stop proxies and quit |
+| **Start All Proxies** | Start all enabled proxies |
+| **Stop All Proxies** | Stop sing-box and close all ports |
+| **Restart All Proxies** | Restart and trigger health check |
+| **Check All Nodes** | Run an immediate health check |
+| **Flush DNS** | Flush system DNS and restart sing-box |
+| **Routing Mode** | Select Global, Rule, or Direct mode |
+| **Import Subscription** | Import an HTTP(S), SS, VMess, or VLESS source |
+| **Quit** | Stop proxies and quit |
 
 **Icon Colors:**
 - 🟢 Green — All proxies healthy
@@ -277,6 +227,10 @@ char* OneProxy_Restart();
 char* OneProxy_Status();                    // JSON string
 char* OneProxy_HealthCheck();
 char* OneProxy_FlushDNS();
+char* OneProxy_SelectProxy(char* proxyName);
+char* OneProxy_ExportConfig();
+char* OneProxy_ImportConfig(char* input);
+char* OneProxy_GetVersion();
 void  OneProxy_FreeString(char* ptr);       // Free returned strings
 ```
 
@@ -314,7 +268,7 @@ All proxies show red, latency = timeout
 
 Check logs:
 ```powershell
-type logs\singbox.log
+type %USERPROFILE%\.oneproxy\logs\singbox.log
 ```
 
 ### Tray icon not showing
@@ -326,10 +280,6 @@ cd trayapp\build
 # Check console output
 ```
 
-More issues? See [docs/troubleshooting.md](docs/troubleshooting.md)
-
----
-
 ## Project Structure
 
 ```
@@ -340,6 +290,7 @@ OneProxy/
 ├── internal/
 │   ├── config/            # Config parser + sing-box config generator
 │   │   ├── config.go      # JSON unmarshal, validation
+│   │   ├── subscription.go # SS, VMess, and VLESS subscription parser
 │   │   └── singbox.go     # Generate sing-box JSON from config
 │   └── proxy/             # Core proxy management
 │       ├── manager.go     # Process lifecycle, Start/Stop/Restart
@@ -352,21 +303,15 @@ OneProxy/
 ├── configs/
 │   └── config.example.json
 ├── bin/                   # sing-box binary (user provides)
-├── logs/                  # sing-box stdout/stderr
 ├── build.ps1              # One-click build script
-└── config.json            # User config (gitignored)
+└── config-placeholder.json # Safe first-run template
 ```
 
 ---
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for:
-- Setting up development environment
-- Build system details (Go build modes, Qt/CMake, MSVC toolchain)
-- Code structure and conventions
-- Running tests
-- Submitting PRs
+Run `go test ./...` and `go vet ./...` before building. Windows toolchain paths and the end-to-end verification checklist are documented in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -388,7 +333,7 @@ To deploy oneproxy-tray.exe to another Windows machine:
 trayapp/build/
 ├── oneproxy-tray.exe
 ├── oneproxy.dll
-├── config.json              # Your proxy config
+├── config-placeholder.json  # Safe first-run template
 ├── green.ico, yellow.ico, red.ico
 ├── Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll
 ├── platforms/
@@ -397,9 +342,7 @@ trayapp/build/
     └── sing-box.exe         # Proxy engine
 ```
 
-**Optional:**
-- `oneproxy.exe` — CLI tool
-- `logs/` — Auto-created for sing-box output
+Runtime configuration and logs are stored under `%USERPROFILE%\.oneproxy\`.
 
 ---
 
@@ -426,7 +369,7 @@ A: OneProxy exposes each node as a separate port, enabling per-application proxy
 A: The Go DLL core is cross-platform, but the Qt tray app currently targets Windows only. PRs welcome for other platforms.
 
 **Q: Can I use HTTP proxies instead of SOCKS5?**  
-A: Change `proxy_type` to `"http"` in `config.json` → `inbound` section. sing-box will create HTTP CONNECT proxies on the same ports.
+A: Yes. Every OneProxy local port accepts both SOCKS5 and HTTP CONNECT.
 
 **Q: How do I add a new proxy node?**  
 A: Edit `config.json`, add a new entry to `proxies` array with a unique `local_port`, restart via tray menu.

@@ -46,7 +46,7 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 		}
 		px, err := ParseSubscriptionLine(line)
 		if err != nil {
-			continue // skip unrecognized protocols (vless, trojan, etc.)
+			continue // skip unrecognized protocols (trojan, etc.)
 		}
 		proxies = append(proxies, px)
 	}
@@ -68,14 +68,59 @@ func ParseSubscriptionLine(line string) (ProxyConfig, error) {
 		return parseShadowsocks(line)
 	case strings.HasPrefix(line, "vmess://"):
 		return parseVMess(line)
+	case strings.HasPrefix(line, "vless://"):
+		return parseVLESS(line)
 	default:
 		return ProxyConfig{}, fmt.Errorf("unsupported protocol: %s", line[:min(20, len(line))])
 	}
 }
 
+func parseVLESS(uri string) (ProxyConfig, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return ProxyConfig{}, fmt.Errorf("parse vless URL: %w", err)
+	}
+	if u.Scheme != "vless" || u.User == nil || u.User.Username() == "" {
+		return ProxyConfig{}, fmt.Errorf("invalid vless URL")
+	}
+
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 || port > 65535 || u.Hostname() == "" {
+		return ProxyConfig{}, fmt.Errorf("invalid vless server or port")
+	}
+
+	query := u.Query()
+	if query.Get("type") != "tcp" || query.Get("security") != "reality" || query.Get("flow") != "xtls-rprx-vision" {
+		return ProxyConfig{}, fmt.Errorf("unsupported vless variant")
+	}
+	if encryption := query.Get("encryption"); encryption != "" && encryption != "none" {
+		return ProxyConfig{}, fmt.Errorf("unsupported vless encryption")
+	}
+	if query.Get("sni") == "" || query.Get("fp") == "" || query.Get("pbk") == "" || query.Get("sid") == "" {
+		return ProxyConfig{}, fmt.Errorf("incomplete vless reality parameters")
+	}
+
+	px := ProxyConfig{
+		Type:             "vless",
+		Server:           u.Hostname(),
+		Port:             port,
+		UUID:             u.User.Username(),
+		Security:         "reality",
+		Flow:             "xtls-rprx-vision",
+		ServerName:       query.Get("sni"),
+		Fingerprint:      query.Get("fp"),
+		RealityPublicKey: query.Get("pbk"),
+		RealityShortID:   query.Get("sid"),
+	}
+	if u.Fragment != "" {
+		px.Name = extractHostname(u.Fragment)
+	}
+	return px, nil
+}
+
 // ── Fragment & name extraction ────────────────────────────────────────
-// fragment format: "JMS-746476@c702s1.portablesubmarines.com:15699"
-// Returns the hostname stripped of port as both name and server.
+// fragment format: "JMS-123@example.com:443"
+// Returns the hostname stripped of port for use as a display name.
 func extractHostname(fragment string) string {
 	if idx := strings.LastIndex(fragment, "@"); idx >= 0 {
 		hostPart := fragment[idx+1:]

@@ -17,8 +17,6 @@
 #include <thread>
 #include <functional>
 #include <windows.h>
-#include <wininet.h>
-#pragma comment(lib, "wininet.lib")
 #include "i18n.h"
 
 // ─── DLL bindings ──────────────────────────────────
@@ -242,7 +240,7 @@ private:
             int srvPort = px["server_port"].toInt();
             bool isActive = (unifiedPort > 0 && h && name == active);
 
-            QString proto = (typ == "shadowsocks") ? "SS" : (typ == "vmess") ? "VM" : typ.left(3);
+            QString proto = (typ == "shadowsocks") ? "SS" : (typ == "vmess") ? "VM" : (typ == "vless") ? "VL" : typ.left(3);
             QString dot = isActive ? "●" : (h ? "○" : "✗");
             QString label = h
                 ? QString("  %1  %2:%3 → :%4  %5  %6ms")
@@ -269,12 +267,6 @@ private:
         menu->addAction(s.check, this, &OneProxyTray::doCheck);
         menu->addAction(s.flushDNS, this, &OneProxyTray::doFlush);
         menu->addSeparator();
-
-        // System proxy toggle
-        QAction *sysProxyAction = menu->addAction(s.systemProxy);
-        sysProxyAction->setCheckable(true);
-        sysProxyAction->setChecked(isSystemProxy());
-        connect(sysProxyAction, &QAction::toggled, this, [this](bool on) { setSystemProxy(on); });
 
         // Routing mode submenu
         auto *routeMenu = menu->addMenu(s.routingMode);
@@ -375,7 +367,7 @@ private:
             return;
         }
         if (!text.startsWith("http://") && !text.startsWith("https://") &&
-            !text.startsWith("ss://") && !text.startsWith("vmess://")) {
+            !text.startsWith("ss://") && !text.startsWith("vmess://") && !text.startsWith("vless://")) {
             tray->showMessage("OneProxy", "Clipboard is not a valid subscription URL", QSystemTrayIcon::Warning, 3000);
             return;
         }
@@ -428,41 +420,6 @@ private:
             RegDeleteValueW(hKey, L"OneProxy");
         }
         RegCloseKey(hKey);
-    }
-
-    static bool isSystemProxy() {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
-            return false;
-        DWORD val = 0, sz = sizeof(val);
-        RegQueryValueExW(hKey, L"ProxyEnable", nullptr, nullptr, (LPBYTE)&val, &sz);
-        RegCloseKey(hKey);
-        return val != 0;
-    }
-
-    static void setSystemProxy(bool on) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
-            return;
-        if (on) {
-            DWORD en = 1;
-            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
-            auto server = L"http=127.0.0.1:1080";
-            RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)server, (DWORD)((wcslen(server)+1)*sizeof(wchar_t)));
-            auto override = L"<local>";
-            RegSetValueExW(hKey, L"ProxyOverride", 0, REG_SZ, (BYTE*)override, (DWORD)((wcslen(override)+1)*sizeof(wchar_t)));
-        } else {
-            DWORD en = 0;
-            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&en, sizeof(en));
-        }
-        RegCloseKey(hKey);
-        // Notify all apps to re-read proxy settings immediately — no restart needed.
-        InternetSetOptionW(nullptr, 39, nullptr, 0);  // INTERNET_OPTION_SETTINGS_CHANGED
-        InternetSetOptionW(nullptr, 37, nullptr, 0);  // INTERNET_OPTION_REFRESH
-        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-                           (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 2000, nullptr);
     }
 
     // Current routing mode — persisted in a tiny registry string (no DLL needed)

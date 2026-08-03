@@ -6,7 +6,7 @@ OneProxy 由两个主要组件组成：
 
 | 组件 | 语言 | 依赖 | 跨平台性 |
 |------|------|------|----------|
-| **oneproxy.dll** | Go 1.21+ | Go 标准库 + sing-box | ✅ 完全跨平台 |
+| **oneproxy.dll** | Go 1.25+ | Go 标准库 + sing-box | ✅ 完全跨平台 |
 | **oneproxy-tray.exe** | C++ Qt6 | Qt6 Widgets | ✅ Qt 跨平台框架 |
 
 ---
@@ -16,7 +16,7 @@ OneProxy 由两个主要组件组成：
 **状态：** 已完成，生产就绪
 
 **工具链：**
-- Go 1.21+ (cross-compile ready)
+- Go 1.25+ (cross-compile ready)
 - MSVC 2022 或 MinGW-w64
 - Qt 6.8 (MSVC/MinGW)
 

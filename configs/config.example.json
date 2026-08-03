@@ -43,17 +43,32 @@
     {
       "name": "Proxy-3",
       "enabled": true,
+      "local_port": 10803,
       "type": "vmess",
       "server": "example3.yourproxy.com",
       "port": 443,
       "uuid": "your-uuid-here",
       "alter_id": 0,
       "security": "auto"
+    },
+    {
+      "name": "Proxy-4-Reality",
+      "enabled": true,
+      "local_port": 10804,
+      "type": "vless",
+      "server": "example4.yourproxy.com",
+      "port": 443,
+      "uuid": "your-vless-uuid-here",
+      "security": "reality",
+      "flow": "xtls-rprx-vision",
+      "server_name": "www.example.com",
+      "fingerprint": "chrome",
+      "reality_public_key": "your-reality-public-key-here",
+      "reality_short_id": "0123456789abcdef"
     }
   ],
 
   "inbound": {
-    "listen": "127.0.0.1",
-    "proxy_type": "socks5"
+    "listen": "127.0.0.1"
   }
 }
