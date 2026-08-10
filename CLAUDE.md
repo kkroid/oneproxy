@@ -3,7 +3,7 @@
 ## 构建环境
 
 - **OS**: Windows 10/11, x64
-- **Go**: 1.25+
+- **Go**: 1.26+
 - **MSVC**: Visual Studio 2022 C++ build tools
 - **Qt6**: 6.8.3, MSVC 2022 x64
 - **CMake**: available in PATH

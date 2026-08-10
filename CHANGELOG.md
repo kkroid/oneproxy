@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.6.0 - Unreleased
+## Unreleased
+
+### Changed
+
+- Upgraded the Go build baseline to 1.26 and added native Windows, macOS, and Linux compile checks for the CLI, shared library, and Qt tray application. Windows remains the only runtime-verified and released platform.
+
+## 0.6.0 - 2026-08-03
 
 ### Added
 

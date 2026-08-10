@@ -1,7 +1,7 @@
 # OneProxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![Qt Version](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
 > [English](README.md) | 简体中文
@@ -38,7 +38,7 @@ Windows 多端口代理聚合器 — 将 Shadowsocks、VMess 和 VLESS Reality �
 | 组件 | 版本 | 用途 |
 |------|------|------|
 | **Windows** | 10/11 | 目标操作系统 |
-| **Go** | 1.25+ | 构建 DLL |
+| **Go** | 1.26+ | 构建 DLL |
 | **MSVC** | 2022 | 构建 C++ 托盘 |
 | **Qt** | 6.8+ | GUI 框架 |
 | **sing-box** | 1.13.14 | 代理引擎及规则集编译器 |
@@ -361,7 +361,7 @@ trayapp/build/
 A: OneProxy 将每个节点暴露为独立端口，支持按应用路由代理，无需切换配置文件。
 
 **Q: 支持 macOS/Linux 吗？**  
-A: Go DLL 核心跨平台，但 Qt 托盘应用目前仅支持 Windows。欢迎提交其他平台的 PR。
+A: Go 和 Qt 目标会在 macOS、Linux 上进行编译检查，但目前只有 Windows 经过运行验证并发布。准确边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
 
 **Q: 可以用 HTTP 代理代替 SOCKS5 吗？**  
 A: 可以。OneProxy 的每个本地端口都同时接受 SOCKS5 和 HTTP CONNECT。

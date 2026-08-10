@@ -1,7 +1,7 @@
 # OneProxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![Qt Version](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
 Multi-port proxy aggregator for Windows — converts Shadowsocks, VMess, and VLESS Reality upstream nodes into independent local mixed proxy ports (SOCKS5 + HTTP CONNECT), managed through a native C++ Qt6 system-tray GUI.
@@ -36,7 +36,7 @@ Upstream Proxies (Shadowsocks / VMess / VLESS Reality)
 | Component | Version | Purpose |
 |-----------|---------|---------|
 | **Windows** | 10/11 | Target OS |
-| **Go** | 1.25+ | Build DLL |
+| **Go** | 1.26+ | Build DLL |
 | **MSVC** | 2022 | Build C++ tray |
 | **Qt** | 6.8+ | GUI framework |
 | **sing-box** | 1.13.14 | Proxy engine and rule-set compiler |
@@ -365,7 +365,7 @@ Runtime configuration and logs are stored under `%USERPROFILE%\.oneproxy\`.
 A: OneProxy exposes each node as a separate port, enabling per-application proxy routing without profile switching.
 
 **Q: Does this work on macOS/Linux?**  
-A: The Go DLL core is cross-platform, but the Qt tray app currently targets Windows only. PRs welcome for other platforms.
+A: The Go and Qt targets are compile-checked on macOS and Linux, but only Windows is runtime-verified and released. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the exact boundary.
 
 **Q: Can I use HTTP proxies instead of SOCKS5?**  
 A: Yes. Every OneProxy local port accepts both SOCKS5 and HTTP CONNECT.

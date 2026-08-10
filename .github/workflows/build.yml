@@ -6,23 +6,115 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: windows-2022
+  platform-build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        include:
+          - os: windows-2022
+            host: windows
+            arch: win64_msvc2022_64
+          - os: ubuntu-24.04
+            host: linux
+            arch: linux_gcc_64
+          - os: macos-15
+            host: mac
+            arch: clang_64
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.x'
+          cache: true
 
-      - uses: jurplel/install-qt-action@v4
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
-          arch: 'win64_msvc2022_64'
+          host: ${{ matrix.host }}
+          target: desktop
+          arch: ${{ matrix.arch }}
+          cache: true
+
+      - name: Test Go packages
+        run: go test -count=1 ./...
+
+      - name: Vet Go packages
+        run: go vet ./...
+
+      - name: Build Go targets on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go build -buildvcs=false -o oneproxy.exe ./cmd/oneproxy
+          if ($LASTEXITCODE -ne 0) { throw "CLI build failed: $LASTEXITCODE" }
+          go build -buildvcs=false -buildmode=c-shared -o oneproxy.dll ./cmd/oneproxy-dll
+          if ($LASTEXITCODE -ne 0) { throw "Shared library build failed: $LASTEXITCODE" }
+
+      - name: Build Go targets on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          go build -buildvcs=false -o oneproxy ./cmd/oneproxy
+          go build -buildvcs=false -buildmode=c-shared -o liboneproxy.dylib ./cmd/oneproxy-dll
+
+      - name: Build Go targets on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          go build -buildvcs=false -o oneproxy ./cmd/oneproxy
+          go build -buildvcs=false -buildmode=c-shared -o liboneproxy.so ./cmd/oneproxy-dll
+
+      - name: Configure tray on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S trayapp -B trayapp/build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" -DBUILD_TESTING=ON
+
+      - name: Configure tray on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cmake -S trayapp -B trayapp/build -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DBUILD_TESTING=ON
+
+      - name: Build tray
+        run: cmake --build trayapp/build --config Release
+
+      - name: Test tray platform helpers
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir trayapp/build -C Release --output-on-failure
+
+  windows-installer:
+    name: Windows installer
+    needs: platform-build
+    runs-on: windows-2022
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
           cache: true
 
       - name: Install Inno Setup
@@ -48,20 +140,19 @@ jobs:
           if (-not $singBox) { throw 'sing-box.exe not found in archive' }
           Copy-Item $singBox.FullName bin\sing-box.exe
 
-      - name: Test
-        run: go test ./...
-
       - name: Build Installer
         shell: pwsh
         run: .\build.ps1 -Installer
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: OneProxy-Installer
+          if-no-files-found: error
           path: dist/OneProxy-*.exe
 
-      - name: Attach to Release
+      - name: Attach installer to release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/OneProxy-*.exe
