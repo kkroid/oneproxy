@@ -17,7 +17,6 @@ const (
 	configFile        = "config.json"
 	exampleConfigFile = "configs/config.example.json"
 	singboxConfigFile = "singbox_generated.json"
-	singboxBinary     = "bin/sing-box.exe"
 )
 
 func main() {
@@ -33,6 +32,7 @@ func main() {
 	}
 	fmt.Printf("Generated sing-box config: %s\n", singboxConfigFile)
 
+	singboxBinary := filepath.Join("bin", singBoxExecutableName())
 	if _, err := os.Stat(singboxBinary); os.IsNotExist(err) {
 		log.Fatalf("sing-box not found at %s", singboxBinary)
 	}
@@ -45,7 +45,9 @@ func main() {
 
 	if cfg.DNS.FlushOnFailure {
 		cooldown := time.Duration(cfg.DNS.FlushIntervalSeconds) * time.Second
-		if cooldown <= 0 { cooldown = 300 * time.Second }
+		if cooldown <= 0 {
+			cooldown = 300 * time.Second
+		}
 		dnsFlusher.SetCooldown(cooldown)
 		healthChecker.SetAllDownCallback(func() {
 			fmt.Printf("[%s] all nodes down, flushing DNS (cooldown=%vs)...", time.Now().Format("15:04:05"), int(cooldown.Seconds()))

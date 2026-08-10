@@ -1,6 +1,6 @@
-// OneProxy Tray — C++17 Qt6 + Go DLL
-// Build: cmake + nmake with MSVC 2022
+// OneProxy Tray — C++17 Qt6 + Go shared library
 #include <QApplication>
+#include <QCoreApplication>
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QAction>
@@ -14,10 +14,13 @@
 #include <QFileDialog>
 #include <QClipboard>
 #include <QDebug>
+#include <QDesktopServices>
+#include <QLibrary>
+#include <QUrl>
 #include <thread>
 #include <functional>
-#include <windows.h>
 #include "i18n.h"
+#include "platform/platform.h"
 
 // ─── DLL bindings ──────────────────────────────────
 typedef char* (*PFN_Start)(char*);
@@ -43,22 +46,28 @@ static PFN_Import pImport;
 static PFN_Free   pFree;
 
 bool loadDLL() {
-    static HMODULE dll = nullptr;
-    if (dll) return true;
-    dll = LoadLibraryW(L"oneproxy.dll");
-    if (!dll) {
-        wchar_t exe[1024]; GetModuleFileNameW(nullptr, exe, 1024);
-        std::wstring p(exe); p = p.substr(0, p.find_last_of(L"\\/"));
-        SetCurrentDirectoryW(p.c_str());
-        dll = LoadLibraryW(L"oneproxy.dll");
+    static QLibrary library;
+    if (library.isLoaded()) return true;
+
+    library.setFileName(QDir(QCoreApplication::applicationDirPath())
+                            .filePath(Platform::sharedLibraryName()));
+    if (!library.load()) {
+        qCritical() << "Shared library load failed:" << library.errorString();
+        return false;
     }
-    if (!dll) { qCritical() << "DLL load failed" << GetLastError(); return false; }
-    #define L(fn,n) fn = (decltype(fn))GetProcAddress(dll, n)
+
+    #define L(fn,n) fn = reinterpret_cast<decltype(fn)>(library.resolve(n))
     L(pStart,"OneProxy_Start"); L(pStop,"OneProxy_Stop"); L(pRestart,"OneProxy_Restart");
     L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
     L(pSelect,"OneProxy_SelectProxy"); L(pExport,"OneProxy_ExportConfig"); L(pImport,"OneProxy_ImportConfig"); L(pFree,"OneProxy_FreeString");
     #undef L
-    return true;
+    const bool resolved = pStart && pStop && pRestart && pStatus && pCheck &&
+                          pFlush && pSelect && pExport && pImport && pFree;
+    if (!resolved) {
+        qCritical() << "Shared library exports are incomplete";
+        library.unload();
+    }
+    return resolved;
 }
 
 QString callFree(char* p) {
@@ -68,48 +77,16 @@ QString callFree(char* p) {
     return r;
 }
 
-// ─── TaskbarCreated: re-show tray icon after explorer.exe restarts ──
-// Windows broadcasts the registered "TaskbarCreated" message when the shell
-// restarts. A hidden message-only window listens for it and re-adds the icon.
-static UINT WM_TASKBARCREATED = 0;
-static QSystemTrayIcon *g_tray = nullptr;
-
-static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_TASKBARCREATED && g_tray) {
-        g_tray->hide();
-        g_tray->show();
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-static void createTrayWindow() {
-    WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
-
-    WNDCLASSEXW wc = {};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = TrayWndProc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"OneProxyTrayWindow";
-    RegisterClassExW(&wc);
-
-    CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
-                    HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
-}
-
 // ─── Icons ──────────────────────────────────────────
 #include <QPainter>
 #include <QPixmap>
 #include <QColor>
 static QIcon icoGreen, icoYellow, icoRed;
 
-static QString exeDir() {
-    wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr, b, MAX_PATH);
-    QString path = QString::fromWCharArray(b);
-    return path.left(path.lastIndexOf('\\'));
-}
-
 static QIcon loadIcon(const QString &name) {
-    QIcon ic(exeDir() + "\\" + name);
+    QIcon ic(QDir(QCoreApplication::applicationDirPath()).filePath(name));
+    if (!ic.isNull()) return ic;
+    ic = QIcon(QStringLiteral(":/icons/") + name);
     if (!ic.isNull()) return ic;
     QPixmap px(64,64); px.fill(Qt::transparent);
     QPainter pr(&px); pr.setRenderHint(QPainter::Antialiasing);
@@ -270,6 +247,7 @@ private:
 
         // Routing mode submenu
         auto *routeMenu = menu->addMenu(s.routingMode);
+        routeMenu->setEnabled(Platform::routingModeSupported());
         auto *routeGroup = new QActionGroup(this);
         routeGroup->setExclusive(true);
 
@@ -293,6 +271,7 @@ private:
         QAction *autoAction = menu->addAction(s.autoStart);
         autoAction->setCheckable(true);
         autoAction->setChecked(isAutoStart());
+        autoAction->setEnabled(Platform::autoStartSupported());
         connect(autoAction, &QAction::toggled, this, [this](bool on) { setAutoStart(on); });
 
         menu->addSeparator();
@@ -340,9 +319,7 @@ private:
             if (!QFile::exists(path)) path = "";
         }
         if (!path.isEmpty()) {
-            ShellExecuteW(nullptr, L"open", L"notepad.exe",
-                          (L"\"" + path.toStdWString() + L"\"").c_str(),
-                          nullptr, SW_SHOW);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
         }
     }
 
@@ -395,52 +372,19 @@ private:
     }
 
     static bool isAutoStart() {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
-            return false;
-        wchar_t val[1024] = {};
-        DWORD sz = sizeof(val);
-        auto r = RegQueryValueExW(hKey, L"OneProxy", nullptr, nullptr, (LPBYTE)val, &sz);
-        RegCloseKey(hKey);
-        return r == ERROR_SUCCESS;
+        return Platform::autoStartEnabled();
     }
 
     static void setAutoStart(bool on) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
-            return;
-        if (on) {
-            wchar_t exe[MAX_PATH];
-            GetModuleFileNameW(nullptr, exe, MAX_PATH);
-            RegSetValueExW(hKey, L"OneProxy", 0, REG_SZ, (BYTE*)exe,
-                           (DWORD)((wcslen(exe) + 1) * sizeof(wchar_t)));
-        } else {
-            RegDeleteValueW(hKey, L"OneProxy");
-        }
-        RegCloseKey(hKey);
+        Platform::setAutoStart(on);
     }
 
-    // Current routing mode — persisted in a tiny registry string (no DLL needed)
     QString routingMode() {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\OneProxy", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
-            return "global";
-        wchar_t val[32] = {};
-        DWORD sz = sizeof(val);
-        RegQueryValueExW(hKey, L"RouteMode", nullptr, nullptr, (LPBYTE)val, &sz);
-        RegCloseKey(hKey);
-        return QString::fromWCharArray(val).isEmpty() ? "global" : QString::fromWCharArray(val);
+        return Platform::routingMode();
     }
 
     void setRoutingMode(const QString &m) {
-        HKEY hKey;
-        RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\OneProxy", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr);
-        auto s = m.toStdWString();
-        RegSetValueExW(hKey, L"RouteMode", 0, REG_SZ, (BYTE*)s.c_str(), (DWORD)((s.size()+1)*sizeof(wchar_t)));
-        RegCloseKey(hKey);
+        if (!Platform::setRoutingMode(m)) return;
         // Restart to apply new route
         if (tray) {  // bit of delay: stop → restart
             callFree(pStop());
@@ -461,9 +405,8 @@ int main(int argc, char *argv[]) {
     icoRed    = loadIcon("red.ico");    qDebug() << "  red ok";
     if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
     qDebug() << "DLL OK";
-    createTrayWindow();
     auto *t = new OneProxyTray;
-    g_tray = t->tray;
+    Platform::initializeTrayRecovery(t->tray);
     return app.exec();
 }
 

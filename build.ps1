@@ -110,7 +110,7 @@ Set-Content -Path $buildBat -Encoding ASCII @"
 @echo off
 call "$vcvars" >nul 2>&1
 cd /d "$buildDir"
-cmake "$root\trayapp" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$qtDir" >> "$buildLog" 2>&1
+cmake "$root\trayapp" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$qtDir" >> "$buildLog" 2>&1
 if %ERRORLEVEL% neq 0 exit /b 2
 nmake >> "$buildLog" 2>&1
 if %ERRORLEVEL% neq 0 exit /b 3

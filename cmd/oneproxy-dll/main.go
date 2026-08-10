@@ -17,8 +17,6 @@ import (
 	"time"
 	"unsafe"
 
-	"golang.org/x/sys/windows/registry"
-
 	"github.com/kkroid/oneproxy/internal/config"
 	"github.com/kkroid/oneproxy/internal/logger"
 	"github.com/kkroid/oneproxy/internal/proxy"
@@ -38,59 +36,13 @@ var (
 // ---- helpers ----
 
 func errStr(err error) *C.char {
-	if err == nil { return nil }
+	if err == nil {
+		return nil
+	}
 	return C.CString(err.Error())
 }
 
 // ---- exports ----
-
-// resolveDataDir returns ~/.oneproxy/ as an absolute path and creates it.
-// The tray EXE may have its cwd set to a read-only install directory, so we
-// explicitly derive the path from the user profile and make it absolute.
-func resolveDataDir() string {
-	dir := filepath.Join(os.Getenv("USERPROFILE"), ".oneproxy")
-	if s := os.Getenv("HOME"); dir == "" && s != "" {
-		dir = filepath.Join(s, ".oneproxy")
-	}
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".oneproxy")
-	}
-	dir, _ = filepath.Abs(dir)
-	os.MkdirAll(dir, 0755)
-	os.MkdirAll(filepath.Join(dir, "logs"), 0755)
-	return dir
-}
-
-// exeDir returns the directory containing oneproxy.dll and the tray EXE.
-// The tray already calls SetCurrentDirectory to the correct location in
-// loadDLL(), so cwd is reliable in production. For standalone/test use,
-// we check multiple locations.
-func exeDir() string {
-	// Primary: cwd (tray sets this via SetCurrentDirectory in loadDLL)
-	cwd, err := os.Getwd()
-	if err == nil {
-		if _, err := os.Stat(filepath.Join(cwd, "oneproxy.dll")); err == nil {
-			return cwd
-		}
-	}
-
-	// Fallback: host EXE dir (works when built standalone, not DLL)
-	exe, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(exe)
-		if _, err := os.Stat(filepath.Join(dir, "oneproxy.dll")); err == nil {
-			return dir
-		}
-		// In test scenarios (Python), check if bin/ exists in EXE dir
-		if _, err := os.Stat(filepath.Join(dir, "bin", "sing-box.exe")); err == nil {
-			return dir
-		}
-	}
-
-	dir, _ := filepath.Abs(".")
-	return dir
-}
 
 // resolveConfig finds config.json in: 1) directly if absolute, 2) cwd,
 // 3) exe/dll directory (production), 4) ~/.oneproxy/ (installed fallback).
@@ -143,14 +95,12 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	}
 
 	cfg, err := config.Load(found)
-	if err != nil { return errStr(err) }
+	if err != nil {
+		return errStr(err)
+	}
 
-	// Routing mode override from registry (set by tray menu)
-	if key, err := registry.OpenKey(registry.CURRENT_USER, `Software\OneProxy`, registry.QUERY_VALUE); err == nil {
-		if v, _, err := key.GetStringValue("RouteMode"); err == nil && v != "" {
-			cfg.RouteMode = v
-		}
-		key.Close()
+	if routeMode := loadRouteModeOverride(); routeMode != "" {
+		cfg.RouteMode = routeMode
 	}
 
 	gConfig = cfg
@@ -170,13 +120,15 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	ed := exeDir()
 
 	gen := config.NewSingBoxGenerator(cfg, ed)
-	if err := gen.SaveToFile(genCfg); err != nil { return errStr(err) }
+	if err := gen.SaveToFile(genCfg); err != nil {
+		return errStr(err)
+	}
 
 	// sing-box binary - try cwd/bin/ first, then exe dir/bin/
 	cwd, _ := filepath.Abs(".")
 
 	for _, dir := range []string{cwd, ed} {
-		ab := filepath.Join(dir, "bin", "sing-box.exe")
+		ab := filepath.Join(dir, "bin", singBoxExecutableName())
 		ab, _ = filepath.Abs(ab)
 		if _, err := os.Stat(ab); err == nil {
 			manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
@@ -185,7 +137,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 			goto started
 		}
 	}
-	return errStr(fmt.Errorf("sing-box.exe not found (cwd=%s, exe=%s)", cwd, ed))
+	return errStr(fmt.Errorf("%s not found (cwd=%s, exe=%s)", singBoxExecutableName(), cwd, ed))
 
 started:
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
@@ -212,7 +164,9 @@ started:
 		})
 	}
 
-	if err := gManager.Start(); err != nil { return errStr(err) }
+	if err := gManager.Start(); err != nil {
+		return errStr(err)
+	}
 	if cfg.HealthCheck.Enabled {
 		if gLogger != nil {
 			gLogger.Info("health check started, interval=%ds, timeout=%ds",
@@ -230,11 +184,19 @@ started:
 func OneProxy_Stop() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
-	if gLogger != nil { gLogger.Info("stopping") }
-	if gHealthChecker != nil { gHealthChecker.Stop() }
-	if gManager != nil { gManager.Stop() }
+	if gLogger != nil {
+		gLogger.Info("stopping")
+	}
+	if gHealthChecker != nil {
+		gHealthChecker.Stop()
+	}
+	if gManager != nil {
+		gManager.Stop()
+	}
 	gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
-	if gLogger != nil { gLogger.Info("stopped") }
+	if gLogger != nil {
+		gLogger.Info("stopped")
+	}
 	return nil
 }
 
@@ -242,12 +204,22 @@ func OneProxy_Stop() *C.char {
 func OneProxy_Restart() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
-	if gManager == nil { return errStr(fmt.Errorf("not started")) }
-	if gLogger != nil { gLogger.Info("restarting") }
-	if gHealthChecker != nil { gHealthChecker.Stop() }
+	if gManager == nil {
+		return errStr(fmt.Errorf("not started"))
+	}
+	if gLogger != nil {
+		gLogger.Info("restarting")
+	}
+	if gHealthChecker != nil {
+		gHealthChecker.Stop()
+	}
 	gManager.Restart()
-	if gConfig != nil && gConfig.HealthCheck.Enabled && gHealthChecker != nil { gHealthChecker.Start() }
-	if gLogger != nil { gLogger.Info("restarted") }
+	if gConfig != nil && gConfig.HealthCheck.Enabled && gHealthChecker != nil {
+		gHealthChecker.Start()
+	}
+	if gLogger != nil {
+		gLogger.Info("restarted")
+	}
 	return nil
 }
 
@@ -274,7 +246,9 @@ func OneProxy_Status() *C.char {
 	defer gMu.Unlock()
 
 	out := statusOut{}
-	if gManager != nil { out.Running = gManager.IsRunning() }
+	if gManager != nil {
+		out.Running = gManager.IsRunning()
+	}
 	if gConfig != nil {
 		out.UnifiedPort = gConfig.Unified.Port
 		for _, p := range gConfig.Proxies {
@@ -303,8 +277,12 @@ func OneProxy_HealthCheck() *C.char {
 
 //export OneProxy_FlushDNS
 func OneProxy_FlushDNS() *C.char {
-	if gDNSFlusher == nil || gManager == nil { return errStr(fmt.Errorf("not running")) }
-	if !gDNSFlusher.CanFlush() { return errStr(fmt.Errorf("too frequent")) }
+	if gDNSFlusher == nil || gManager == nil {
+		return errStr(fmt.Errorf("not running"))
+	}
+	if !gDNSFlusher.CanFlush() {
+		return errStr(fmt.Errorf("too frequent"))
+	}
 	gDNSFlusher.FlushAll(gManager)
 	return nil
 }
@@ -406,7 +384,9 @@ func OneProxy_ImportConfig(input *C.char) *C.char {
 		}
 		gMu.Lock()
 		cfg, _ := config.Load(savePath)
-		if cfg != nil { gConfig = cfg }
+		if cfg != nil {
+			gConfig = cfg
+		}
 		_ = reloadAndRestart()
 		gMu.Unlock()
 		return nil
@@ -450,7 +430,7 @@ func OneProxy_ImportConfig(input *C.char) *C.char {
 		replaced := false
 		for i, p := range cfg.Proxies {
 			if p.Server == px.Server && p.Port == px.Port {
-				px.Name = p.Name        // keep the old name
+				px.Name = p.Name           // keep the old name
 				px.LocalPort = p.LocalPort // keep the old port
 				cfg.Proxies[i] = px
 				replaced = true
@@ -493,19 +473,25 @@ func OneProxy_SelectProxy(proxyName *C.char) *C.char {
 		return errStr(fmt.Errorf("unified port not configured"))
 	}
 	selectorTag := cfg.Unified.Tag
-	if selectorTag == "" { selectorTag = "proxy" }
+	if selectorTag == "" {
+		selectorTag = "proxy"
+	}
 
 	outboundTag := "out-" + sanitizeTag(C.GoString(proxyName))
 	payload, _ := json.Marshal(map[string]string{"name": outboundTag})
 	apiURL := fmt.Sprintf("http://127.0.0.1:9090/proxies/%s", selectorTag)
 
 	req, err := http.NewRequest("PUT", apiURL, bytes.NewReader(payload))
-	if err != nil { return errStr(err) }
+	if err != nil {
+		return errStr(err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil { return errStr(err) }
+	if err != nil {
+		return errStr(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return errStr(fmt.Errorf("clash api returned %d", resp.StatusCode))

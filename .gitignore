@@ -3,9 +3,10 @@
 *.dll
 *.so
 *.dylib
-oneproxy
-oneproxy-*
+/oneproxy
+/oneproxy-*
 trayapp/build/
+trayapp/build-*/
 
 # sing-box binary
 bin/sing-box*

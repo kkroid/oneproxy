@@ -7,12 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/kkroid/oneproxy/internal/logger"
-	"golang.org/x/sys/windows"
 )
 
 // Manager manages the sing-box process
@@ -25,9 +22,8 @@ type Manager struct {
 	mutex       sync.RWMutex
 	stopChan    chan struct{}
 	logFile     *os.File
-	jobObject   windows.Handle
+	process     platformProcess
 	appLog      *logger.Logger
-	lastPID     int // PID of last child, used for scoped cleanup
 }
 
 // NewManagerWithLog is like NewManager but accepts a custom log path.
@@ -50,45 +46,6 @@ func (m *Manager) SetLogger(l *logger.Logger) {
 	m.appLog = l
 }
 
-// killOrphanedSingBox kills a sing-box.exe process. If pid is non-zero,
-// only that specific process is killed (scoped). Otherwise all sing-box.exe
-// processes are killed (used when no previous PID is known).
-func killOrphanedSingBox(pid int) {
-	cmd := func(name string, args ...string) *exec.Cmd {
-		c := exec.Command(name, args...)
-		c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		return c
-	}
-	if pid != 0 {
-		_ = cmd("taskkill", "/F", "/PID", fmt.Sprintf("%d", pid)).Run()
-	} else {
-		_ = cmd("taskkill", "/F", "/IM", "sing-box.exe").Run()
-	}
-}
-
-// createJobObject creates a Windows Job Object with KILL_ON_JOB_CLOSE.
-func createJobObject() (windows.Handle, error) {
-	job, err := windows.CreateJobObject(nil, nil)
-	if err != nil {
-		return 0, fmt.Errorf("CreateJobObject: %w", err)
-	}
-
-	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	_, err = windows.SetInformationJobObject(
-		job,
-		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
-		uint32(unsafe.Sizeof(info)),
-	)
-	if err != nil {
-		windows.CloseHandle(job)
-		return 0, fmt.Errorf("SetInformationJobObject: %w", err)
-	}
-
-	return job, nil
-}
-
 // Start starts the sing-box process.
 func (m *Manager) Start() error {
 	m.mutex.Lock()
@@ -98,12 +55,7 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("sing-box is already running")
 	}
 
-	// Clean up any previous job handle and orphaned process.
-	if m.jobObject != 0 {
-		windows.CloseHandle(m.jobObject)
-		m.jobObject = 0
-	}
-	killOrphanedSingBox(m.lastPID)
+	m.process.close()
 
 	// Check if sing-box binary exists
 	if _, err := os.Stat(m.singboxPath); os.IsNotExist(err) {
@@ -131,55 +83,15 @@ func (m *Manager) Start() error {
 	}
 	m.logFile = logFile
 
-	// Create Windows Job Object — if our process dies, OS kills children.
-	job, err := createJobObject()
+	cmd, err := m.startCommand(logFile)
 	if err != nil {
 		logFile.Close()
 		m.logFile = nil
-		return fmt.Errorf("failed to create job object: %w", err)
-	}
-	m.jobObject = job
-
-	// Create command — hide console window
-	m.cmd = exec.Command(m.singboxPath, "run", "--disable-color", "-c", m.configPath)
-	m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	m.cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
-	m.cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
-	m.cmd.Stdout = logFile
-	m.cmd.Stderr = logFile
-
-	if err := m.cmd.Start(); err != nil {
-		logFile.Close()
-		m.logFile = nil
-		windows.CloseHandle(job)
-		m.jobObject = 0
-		return fmt.Errorf("failed to start sing-box: %w", err)
+		return err
 	}
 
-	// Assign child process to job object. From this point on, if our process
-	// exits for *any* reason, the OS kernel terminates sing-box automatically.
-	procHandle, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(m.cmd.Process.Pid))
-	if err != nil {
-		m.cmd.Process.Kill()
-		logFile.Close()
-		m.logFile = nil
-		windows.CloseHandle(job)
-		m.jobObject = 0
-		return fmt.Errorf("failed to open process handle: %w", err)
-	}
-	err = windows.AssignProcessToJobObject(job, procHandle)
-	windows.CloseHandle(procHandle)
-	if err != nil {
-		m.cmd.Process.Kill()
-		logFile.Close()
-		m.logFile = nil
-		windows.CloseHandle(job)
-		m.jobObject = 0
-		return fmt.Errorf("failed to assign process to job: %w", err)
-	}
-
+	m.cmd = cmd
 	m.isRunning = true
-	m.lastPID = m.cmd.Process.Pid
 	m.stopChan = make(chan struct{})
 	go m.monitor(m.cmd, m.stopChan)
 	return nil
@@ -197,16 +109,7 @@ func (m *Manager) Stop() error {
 	// Signal the monitor goroutine that this is an intentional stop.
 	close(m.stopChan)
 
-	if m.cmd != nil && m.cmd.Process != nil {
-		m.cmd.Process.Kill()
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	// Release job object handle (child already killed)
-	if m.jobObject != 0 {
-		windows.CloseHandle(m.jobObject)
-		m.jobObject = 0
-	}
+	stopErr := m.process.stop(m.cmd)
 
 	if m.logFile != nil {
 		m.logFile.Close()
@@ -215,7 +118,24 @@ func (m *Manager) Stop() error {
 
 	m.isRunning = false
 	m.cmd = nil
+	if stopErr != nil {
+		return fmt.Errorf("failed to stop sing-box: %w", stopErr)
+	}
 	return nil
+}
+
+func (m *Manager) startCommand(logFile *os.File) (*exec.Cmd, error) {
+	cmd := exec.Command(m.singboxPath, "run", "--disable-color", "-c", m.configPath)
+	configureProcessCommand(cmd)
+	cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
+	cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if err := m.process.start(cmd); err != nil {
+		return nil, fmt.Errorf("failed to start sing-box: %w", err)
+	}
+	return cmd, nil
 }
 
 // Restart restarts the sing-box process
@@ -335,26 +255,15 @@ func (m *Manager) monitor(cmd *exec.Cmd, stopChan chan struct{}) {
 			}
 			m.logFile = logFile
 
-			cmd = exec.Command(m.singboxPath, "run", "--disable-color", "-c", m.configPath)
-			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
-			cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true")
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-			m.cmd = cmd
-			m.lastPID = 0 // will be set on success below
-			m.stopChan = make(chan struct{})
-			stopChan = m.stopChan
-			m.mutex.Unlock()
-
-			if err := cmd.Start(); err != nil {
+			cmd, err = m.startCommand(logFile)
+			if err != nil {
+				m.mutex.Unlock()
 				if m.appLog != nil {
 					m.appLog.Error("sing-box restart attempt %d failed: %v", retry+1, err)
 				}
 				continue
 			}
-			m.mutex.Lock()
-			m.lastPID = cmd.Process.Pid
+			m.cmd = cmd
 			m.mutex.Unlock()
 			if m.appLog != nil {
 				m.appLog.Warn("sing-box crashed, auto-restarting (attempt %d/%d)", retry+1, maxRetries)
@@ -364,6 +273,11 @@ func (m *Manager) monitor(cmd *exec.Cmd, stopChan chan struct{}) {
 		// exhausted retries
 		m.mutex.Lock()
 		m.isRunning = false
+		m.process.close()
+		if m.logFile != nil {
+			m.logFile.Close()
+			m.logFile = nil
+		}
 		m.mutex.Unlock()
 		if err != nil {
 			if m.appLog != nil {
