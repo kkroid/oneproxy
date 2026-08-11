@@ -125,7 +125,7 @@ jobs:
           "$app_dir/bin/sing-box" rule-set compile bin/geoip-cn.json -o "$app_dir/bin/geoip-cn.srs"
           "$app_dir/bin/sing-box" rule-set compile bin/geosite-cn.json -o "$app_dir/bin/geosite-cn.srs"
 
-          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$app" -always-overwrite -no-translations
+          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$app" -always-overwrite
           test -x "$app_dir/oneproxy-tray"
           test -f "$app_dir/liboneproxy.dylib"
           test -x "$app_dir/bin/sing-box"
