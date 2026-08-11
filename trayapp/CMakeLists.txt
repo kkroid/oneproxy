@@ -31,6 +31,8 @@ add_executable(oneproxy-tray
 
 if(WIN32)
     set_target_properties(oneproxy-tray PROPERTIES WIN32_EXECUTABLE TRUE)
+elseif(APPLE)
+    set_target_properties(oneproxy-tray PROPERTIES MACOSX_BUNDLE TRUE)
 endif()
 
 target_link_libraries(oneproxy-tray PRIVATE Qt6::Widgets)

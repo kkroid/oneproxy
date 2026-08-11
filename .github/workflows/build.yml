@@ -91,6 +91,58 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir trayapp/build -C Release --output-on-failure
 
+      - name: Package macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version='1.13.14'
+          case "$(uname -m)" in
+            arm64) platform='arm64'; expected='73e8967b0fc08e17bce4263ca56ebc394822401a16497a1c4e02316c888202ab' ;;
+            x86_64) platform='amd64'; expected='5245d645e847f90bb708da74bc020ae078c28489690756419685c04f56b4e3bb' ;;
+            *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          archive="sing-box-${version}-darwin-${platform}.tar.gz"
+          archive_path="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}" \
+            --output "$archive_path"
+          echo "$expected  $archive_path" | shasum --algorithm 256 --check --status
+
+          extract_dir="$RUNNER_TEMP/sing-box"
+          mkdir -p "$extract_dir"
+          tar -xzf "$archive_path" -C "$extract_dir"
+          sing_box_path="$(find "$extract_dir" -type f -name sing-box -perm -111 -print -quit)"
+          test -n "$sing_box_path"
+
+          app='trayapp/build/oneproxy-tray.app'
+          app_dir="$PWD/$app/Contents/MacOS"
+          mkdir -p "$app_dir/bin"
+          cp "$sing_box_path" "$app_dir/bin/sing-box"
+          cp config-placeholder.json "$app_dir/config-placeholder.json"
+          "$app_dir/bin/sing-box" rule-set compile bin/geoip-cn.json -o "$app_dir/bin/geoip-cn.srs"
+          "$app_dir/bin/sing-box" rule-set compile bin/geosite-cn.json -o "$app_dir/bin/geosite-cn.srs"
+
+          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$app" -always-overwrite -no-translations
+          test -x "$app_dir/oneproxy-tray"
+          test -f "$app_dir/liboneproxy.dylib"
+          test -x "$app_dir/bin/sing-box"
+          test -f "$app_dir/bin/geoip-cn.srs"
+          test -f "$app_dir/bin/geosite-cn.srs"
+
+          mkdir -p dist
+          ditto -c -k --keepParent "$PWD/$app" "dist/OneProxy-macos-${platform}.zip"
+
+      - name: Upload macOS app bundle
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OneProxy-macos-${{ runner.arch }}
+          if-no-files-found: error
+          path: dist/OneProxy-macos-*.zip
+
   windows-installer:
     name: Windows installer
     needs: platform-build

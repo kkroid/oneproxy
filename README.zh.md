@@ -361,7 +361,7 @@ trayapp/build/
 A: OneProxy 将每个节点暴露为独立端口，支持按应用路由代理，无需切换配置文件。
 
 **Q: 支持 macOS/Linux 吗？**  
-A: Go 和 Qt 目标会在 macOS、Linux 上进行编译检查，但目前只有 Windows 经过运行验证并发布。准确边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
+A: macOS、Linux 会在 GitHub Actions 中进行编译检查；macOS 还会生成未签名的 `.app` zip artifact，但目前只有 Windows 经过运行验证并发布。准确边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
 
 **Q: 可以用 HTTP 代理代替 SOCKS5 吗？**  
 A: 可以。OneProxy 的每个本地端口都同时接受 SOCKS5 和 HTTP CONNECT。

@@ -365,7 +365,7 @@ Runtime configuration and logs are stored under `%USERPROFILE%\.oneproxy\`.
 A: OneProxy exposes each node as a separate port, enabling per-application proxy routing without profile switching.
 
 **Q: Does this work on macOS/Linux?**  
-A: The Go and Qt targets are compile-checked on macOS and Linux, but only Windows is runtime-verified and released. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the exact boundary.
+A: macOS and Linux are compile-checked in GitHub Actions; macOS also produces an unsigned `.app` zip artifact, but only Windows is runtime-verified and released. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the exact boundary.
 
 **Q: Can I use HTTP proxies instead of SOCKS5?**  
 A: Yes. Every OneProxy local port accepts both SOCKS5 and HTTP CONNECT.
