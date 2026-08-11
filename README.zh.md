@@ -98,7 +98,7 @@ VLESS Reality 配置示例：
 # 一键构建（需要 Go、CMake、MSVC 2022、Qt 6.8.3 和 sing-box.exe）
 .\build.ps1
 
-# 构建便携文件和 dist/OneProxy-0.6.0-setup.exe
+# 构建便携文件和 dist/OneProxy-0.7.0-setup.exe
 .\build.ps1 -Installer
 ```
 

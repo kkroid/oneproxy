@@ -96,7 +96,7 @@ To import a subscription, copy its HTTP(S) URL and choose **Import Subscription 
 # One-command build (requires Go, CMake, MSVC 2022, Qt 6.8.3, and sing-box.exe)
 .\build.ps1
 
-# Build the portable files and dist/OneProxy-0.6.0-setup.exe
+# Build the portable files and dist/OneProxy-0.7.0-setup.exe
 .\build.ps1 -Installer
 ```
 
