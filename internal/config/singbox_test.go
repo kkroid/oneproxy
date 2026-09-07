@@ -2,6 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -80,4 +83,34 @@ func TestGenerateSelectorInterruptsExistingConnections(t *testing.T) {
 		return
 	}
 	t.Fatal("selector outbound not generated")
+}
+
+func TestSaveToFileUsesPrivatePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "singbox_generated.json")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Version: "1.0"}
+	if err := NewSingBoxGenerator(cfg, t.TempDir()).SaveToFile(path); err != nil {
+		t.Fatal(err)
+	}
+	assertMode := func(path string, want os.FileMode) {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("%s mode = %04o, want %04o", path, got, want)
+		}
+	}
+	assertMode(dir, 0700)
+	assertMode(path, 0600)
 }

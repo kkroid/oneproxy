@@ -26,7 +26,7 @@ func TestConfigureProcessCommandWindows(t *testing.T) {
 
 func TestPlatformProcessStopWithoutCommandWindows(t *testing.T) {
 	var process platformProcess
-	if err := process.stop(nil); err != nil {
+	if err := process.stop(nil, nil); err != nil {
 		t.Fatalf("stop(nil) returned error: %v", err)
 	}
 }

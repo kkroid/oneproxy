@@ -6,7 +6,7 @@
 
 > [English](README.md) | 简体中文
 
-Windows 多端口代理聚合器 — 将 Shadowsocks、VMess 和 VLESS Reality 上游节点转换为独立的本地混合代理端口（SOCKS5 + HTTP CONNECT），通过原生 C++ Qt6 系统托盘 GUI 管理。
+支持 Windows 原生托盘界面和 Ubuntu 24.04 前台 CLI 的多端口代理聚合器。它将 Shadowsocks、VMess 和 VLESS Reality 上游节点转换为独立的本地混合代理端口（SOCKS5 + HTTP CONNECT）。
 
 ## 架构
 
@@ -37,8 +37,9 @@ Windows 多端口代理聚合器 — 将 Shadowsocks、VMess 和 VLESS Reality �
 
 | 组件 | 版本 | 用途 |
 |------|------|------|
-| **Windows** | 10/11 | 目标操作系统 |
-| **Go** | 1.26+ | 构建 DLL |
+| **Windows** | 10/11 | 托盘应用目标系统 |
+| **Ubuntu** | 24.04 x86_64 | 前台 CLI 目标系统 |
+| **Go** | 1.26+ | 构建 Go 目标 |
 | **MSVC** | 2022 | 构建 C++ 托盘 |
 | **Qt** | 6.8+ | GUI 框架 |
 | **sing-box** | 1.13.14 | 代理引擎及规则集编译器 |
@@ -113,6 +114,35 @@ OneProxy 支持一个 HTTP(S) 订阅与任意数量的手工节点共存。程�
 ```
 
 托盘图标出现在系统托盘（右下角）。右键打开菜单。
+
+### Ubuntu 24.04 CLI
+
+Ubuntu 当前支持从源码构建、仅以前台方式运行的 CLI；暂不提供安装包、systemd unit、daemon 模式、PID 文件或跨进程控制命令。
+
+```bash
+# 构建 OneProxy
+go build -buildvcs=false -o oneproxy ./cmd/oneproxy
+
+# 下载固定版本的 sing-box
+version=1.13.14
+archive="sing-box-${version}-linux-amd64.tar.gz"
+curl -fL "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}" -o "$archive"
+echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  $archive" | sha256sum -c -
+tar -xzf "$archive"
+
+# 按以下固定目录结构将 sing-box 放在 OneProxy 旁边
+mkdir -p bin
+cp "sing-box-${version}-linux-amd64/sing-box" bin/sing-box
+chmod 755 oneproxy bin/sing-box
+chmod 600 /path/to/config.json
+
+# 前台运行；相对配置路径以当前调用目录为基准
+./oneproxy --config /path/to/config.json
+```
+
+OneProxy 会先用 `sing-box check` 校验生成的配置。运行时状态保存在 `~/.oneproxy`：该目录及 `logs/` 权限为 `0700`，`singbox_generated.json` 和 `logs/singbox.log` 为 `0600`。输入配置必须是普通文件，且不能向组用户或其他用户开放任何权限；OneProxy 不会修改该输入文件。
+
+`--help` 返回 0，无效命令行语法返回 2，配置或运行时失败返回 1。`SIGINT` 和 `SIGTERM` 会停止整个 sing-box 进程组，正常关闭返回 0。sing-box 意外退出时 CLI 返回 1，前台模式不会自动重启它。
 
 ---
 
@@ -199,24 +229,14 @@ OneProxy 支持三种路由模式，通过托盘菜单切换：
 
 ## API 参考
 
-### 命令行工具 (oneproxy.exe)
+### 命令行工具（`oneproxy` / `oneproxy.exe`）
 
-```powershell
-# 启动所有代理
-.\oneproxy.exe start
-
-# 停止所有代理
-.\oneproxy.exe stop
-
-# 显示状态（JSON）
-.\oneproxy.exe status
-
-# 健康检查
-.\oneproxy.exe check
-
-# 刷新 DNS
-.\oneproxy.exe flush
+```text
+oneproxy --config <path>
+oneproxy --help
 ```
+
+CLI 只管理一个前台 sing-box 子进程。需要进程守护时请使用操作系统的进程管理能力；项目暂不提供 service 定义。
 
 ### DLL 导出函数 (oneproxy.dll)
 
@@ -365,7 +385,7 @@ trayapp/build/
 A: OneProxy 将每个节点暴露为独立端口，支持按应用路由代理，无需切换配置文件。
 
 **Q: 支持 macOS/Linux 吗？**  
-A: macOS、Linux 会在 GitHub Actions 中进行编译检查；macOS 还会生成未签名的 `.app` zip artifact，但目前只有 Windows 经过运行验证并发布。准确边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
+A: Ubuntu 24.04 x86_64 已有前台 CLI 运行时验证；macOS 会进行编译检查并生成未签名的 `.app` zip artifact。Windows 仍是唯一提供安装包的系统，Ubuntu 暂无安装包和 systemd 集成。更完整的平台边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
 
 **Q: 可以用 HTTP 代理代替 SOCKS5 吗？**  
 A: 可以。OneProxy 的每个本地端口都同时接受 SOCKS5 和 HTTP CONNECT。

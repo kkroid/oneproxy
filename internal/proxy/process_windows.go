@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 type platformProcess struct {
-	job windows.Handle
+	job         windows.Handle
+	mutex       sync.Mutex
+	stopTimeout time.Duration
 }
 
 func configureProcessCommand(cmd *exec.Cmd) {
@@ -31,7 +35,9 @@ func (p *platformProcess) start(cmd *exec.Cmd) error {
 	if err != nil {
 		return fmt.Errorf("create job object: %w", err)
 	}
+	p.mutex.Lock()
 	p.job = job
+	p.mutex.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		p.close()
@@ -59,7 +65,7 @@ func (p *platformProcess) start(cmd *exec.Cmd) error {
 	return nil
 }
 
-func (p *platformProcess) stop(cmd *exec.Cmd) error {
+func (p *platformProcess) stop(cmd *exec.Cmd, done <-chan struct{}) error {
 	if cmd == nil || cmd.Process == nil {
 		p.close()
 		return nil
@@ -69,10 +75,23 @@ func (p *platformProcess) stop(cmd *exec.Cmd) error {
 	if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
-	return nil
+	timeout := p.stopTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("timed out waiting for sing-box to exit")
+	}
 }
 
 func (p *platformProcess) close() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	if p.job != 0 {
 		_ = windows.CloseHandle(p.job)
 		p.job = 0

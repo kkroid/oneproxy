@@ -4,7 +4,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![Qt Version](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
-Multi-port proxy aggregator for Windows — converts Shadowsocks, VMess, and VLESS Reality upstream nodes into independent local mixed proxy ports (SOCKS5 + HTTP CONNECT), managed through a native C++ Qt6 system-tray GUI.
+Multi-port proxy aggregator with a native Windows tray interface and an Ubuntu 24.04 foreground CLI. It converts Shadowsocks, VMess, and VLESS Reality upstream nodes into independent local mixed proxy ports (SOCKS5 + HTTP CONNECT).
 
 ## Architecture
 
@@ -35,8 +35,9 @@ Upstream Proxies (Shadowsocks / VMess / VLESS Reality)
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| **Windows** | 10/11 | Target OS |
-| **Go** | 1.26+ | Build DLL |
+| **Windows** | 10/11 | Tray application target |
+| **Ubuntu** | 24.04 x86_64 | Foreground CLI target |
+| **Go** | 1.26+ | Build Go targets |
 | **MSVC** | 2022 | Build C++ tray |
 | **Qt** | 6.8+ | GUI framework |
 | **sing-box** | 1.13.14 | Proxy engine and rule-set compiler |
@@ -111,6 +112,35 @@ The script discovers MSVC and Qt through `vswhere.exe` and `qmake.exe`. Custom l
 ```
 
 The tray icon appears in the system tray (bottom-right). Right-click to open menu.
+
+### Ubuntu 24.04 CLI
+
+Ubuntu support is a source-built, foreground-only CLI. It does not currently include a package, systemd unit, daemon mode, PID file, or cross-process control commands.
+
+```bash
+# Build OneProxy.
+go build -buildvcs=false -o oneproxy ./cmd/oneproxy
+
+# Download the pinned sing-box release.
+version=1.13.14
+archive="sing-box-${version}-linux-amd64.tar.gz"
+curl -fL "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}" -o "$archive"
+echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  $archive" | sha256sum -c -
+tar -xzf "$archive"
+
+# Place sing-box beside OneProxy using this exact layout.
+mkdir -p bin
+cp "sing-box-${version}-linux-amd64/sing-box" bin/sing-box
+chmod 755 oneproxy bin/sing-box
+chmod 600 /path/to/config.json
+
+# Run in the foreground. Relative config paths resolve from this directory.
+./oneproxy --config /path/to/config.json
+```
+
+OneProxy validates the generated configuration with `sing-box check` before startup. Runtime state is stored in `~/.oneproxy`: the directory and `logs/` use mode `0700`, while `singbox_generated.json` and `logs/singbox.log` use `0600`. The supplied configuration must be a regular file with no group or other permission bits and is never modified by OneProxy.
+
+`--help` returns 0; invalid CLI syntax returns 2; configuration or runtime failures return 1. `SIGINT` and `SIGTERM` stop the complete sing-box process group and return 0 after a clean shutdown. An unexpected sing-box exit is returned as 1 and is not automatically restarted by the foreground CLI.
 
 ---
 
@@ -203,24 +233,14 @@ This is **server-side routing** — it affects all traffic passing through the p
 
 ## API Reference
 
-### CLI (oneproxy.exe)
+### CLI (`oneproxy` / `oneproxy.exe`)
 
-```powershell
-# Start all proxies
-.\oneproxy.exe start
-
-# Stop all proxies
-.\oneproxy.exe stop
-
-# Show status (JSON)
-.\oneproxy.exe status
-
-# Health check
-.\oneproxy.exe check
-
-# Flush DNS
-.\oneproxy.exe flush
+```text
+oneproxy --config <path>
+oneproxy --help
 ```
+
+The CLI owns one foreground sing-box child. Use operating-system process supervision when needed; service definitions are not included.
 
 ### DLL Exports (oneproxy.dll)
 
@@ -369,7 +389,7 @@ Runtime configuration and logs are stored under `%USERPROFILE%\.oneproxy\`.
 A: OneProxy exposes each node as a separate port, enabling per-application proxy routing without profile switching.
 
 **Q: Does this work on macOS/Linux?**  
-A: macOS and Linux are compile-checked in GitHub Actions; macOS also produces an unsigned `.app` zip artifact, but only Windows is runtime-verified and released. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the exact boundary.
+A: Ubuntu 24.04 x86_64 has a runtime-verified foreground CLI workflow. macOS is compile-checked and produces an unsigned `.app` zip artifact. Windows remains the only packaged release; Ubuntu has no package or systemd integration yet. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the broader platform boundary.
 
 **Q: Can I use HTTP proxies instead of SOCKS5?**  
 A: Yes. Every OneProxy local port accepts both SOCKS5 and HTTP CONNECT.

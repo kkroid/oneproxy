@@ -9,6 +9,42 @@ permissions:
   contents: read
 
 jobs:
+  ubuntu-cli:
+    name: Ubuntu 24.04 CLI lifecycle
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Download verified sing-box
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='1.13.14'
+          archive="sing-box-${version}-linux-amd64.tar.gz"
+          archive_path="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}" \
+            --output "$archive_path"
+          echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  $archive_path" | sha256sum --check --status
+          extract_dir="$RUNNER_TEMP/sing-box-linux-amd64"
+          mkdir -p "$extract_dir"
+          tar -xzf "$archive_path" -C "$extract_dir"
+          sing_box_path="$(find "$extract_dir" -type f -name sing-box -perm -111 -print -quit)"
+          test -n "$sing_box_path"
+          echo "SING_BOX_BIN=$sing_box_path" >> "$GITHUB_ENV"
+
+      - name: Verify foreground CLI
+        shell: bash
+        run: bash scripts/verify-ubuntu-cli.sh
+
   platform-build:
     name: Build (${{ matrix.os }})
     strategy:
