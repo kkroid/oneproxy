@@ -5,11 +5,8 @@ package main
 */
 import "C"
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +19,7 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
-const appVersion = "0.6.0"
+const appVersion = "0.8.0"
 
 var (
 	gManager       *proxy.Manager
@@ -177,6 +174,7 @@ started:
 	if gLogger != nil {
 		gLogger.Info("started OK")
 	}
+	startSubscriptionUpdater()
 	return nil
 }
 
@@ -184,6 +182,7 @@ started:
 func OneProxy_Stop() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
+	stopSubscriptionUpdater()
 	if gLogger != nil {
 		gLogger.Info("stopping")
 	}
@@ -224,9 +223,15 @@ func OneProxy_Restart() *C.char {
 }
 
 type statusOut struct {
-	Running     bool          `json:"running"`
-	UnifiedPort int           `json:"unified_port"`
-	Proxies     []statusProxy `json:"proxies"`
+	Running                bool          `json:"running"`
+	UnifiedPort            int           `json:"unified_port"`
+	SelectionMode          string        `json:"selection_mode,omitempty"`
+	SelectedProxy          string        `json:"selected_proxy,omitempty"`
+	SubscriptionConfigured bool          `json:"subscription_configured"`
+	SubscriptionUpdating   bool          `json:"subscription_updating"`
+	SubscriptionLastAt     string        `json:"subscription_last_at,omitempty"`
+	SubscriptionLastError  string        `json:"subscription_last_error,omitempty"`
+	Proxies                []statusProxy `json:"proxies"`
 }
 
 type statusProxy struct {
@@ -243,18 +248,30 @@ type statusProxy struct {
 //export OneProxy_Status
 func OneProxy_Status() *C.char {
 	gMu.Lock()
-	defer gMu.Unlock()
+	manager := gManager
+	configSnapshot := gConfig
+	healthChecker := gHealthChecker
+	gMu.Unlock()
 
 	out := statusOut{}
-	if gManager != nil {
-		out.Running = gManager.IsRunning()
+	if manager != nil {
+		out.Running = manager.IsRunning()
 	}
-	if gConfig != nil {
-		out.UnifiedPort = gConfig.Unified.Port
-		for _, p := range gConfig.Proxies {
+	if configSnapshot != nil {
+		out.UnifiedPort = configSnapshot.Unified.Port
+		out.SubscriptionConfigured = configSnapshot.SubscriptionURL != ""
+		var lastAt time.Time
+		out.SubscriptionUpdating, lastAt, out.SubscriptionLastError = subscriptionStatus()
+		if !lastAt.IsZero() {
+			out.SubscriptionLastAt = lastAt.Format(time.RFC3339)
+		}
+		if out.Running && out.UnifiedPort > 0 {
+			out.SelectionMode, out.SelectedProxy = selectorState(configSnapshot)
+		}
+		for _, p := range configSnapshot.Proxies {
 			px := statusProxy{Name: p.Name, Port: p.LocalPort, Type: p.Type, Server: p.Server, ServerPort: p.Port, Enabled: p.Enabled}
-			if gHealthChecker != nil {
-				if r := gHealthChecker.GetResult(p.Name); r != nil {
+			if healthChecker != nil {
+				if r := healthChecker.GetResult(p.Name); r != nil {
 					px.IsHealthy = r.IsHealthy
 					px.LatencyMS = r.Latency.Milliseconds()
 				}
@@ -287,21 +304,6 @@ func OneProxy_FlushDNS() *C.char {
 	return nil
 }
 
-// sanitizeTag mirrors config.SingBoxGenerator.sanitizeTag so the tag we PUT
-// to the Clash API matches the outbound tag sing-box actually registered.
-func sanitizeTag(name string) string {
-	var b strings.Builder
-	for _, c := range name {
-		switch {
-		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_':
-			b.WriteRune(c)
-		case c == ' ':
-			b.WriteByte('-')
-		}
-	}
-	return b.String()
-}
-
 // reloadAndRestart regenerates singbox_generated.json from gConfig and restarts
 // sing-box. If sing-box is not currently running, it leaves the generated config
 // in place for the next Start.
@@ -326,142 +328,63 @@ func reloadAndRestart() error {
 		gHealthChecker.Stop()
 		gHealthChecker.SetConfig(gConfig)
 	}
-	gManager.Restart()
+	if err := gManager.Restart(); err != nil {
+		return err
+	}
 	if gConfig.HealthCheck.Enabled && gHealthChecker != nil {
 		gHealthChecker.Start()
 	}
 	return nil
 }
 
-//export OneProxy_ExportConfig
-func OneProxy_ExportConfig() *C.char {
-	path, err := resolveConfig("config.json")
-	if err != nil {
-		return errStr(fmt.Errorf("cannot find config: %w", err))
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return errStr(fmt.Errorf("cannot read config: %w", err))
-	}
-	return C.CString(base64.StdEncoding.EncodeToString(data))
-}
-
-//export OneProxy_ImportConfig
-func OneProxy_ImportConfig(input *C.char) *C.char {
+//export OneProxy_ImportSubscription
+func OneProxy_ImportSubscription(input *C.char) *C.char {
 	raw := C.GoString(input)
-
-	proxies := []config.ProxyConfig(nil)
-	subURL := ""
-	mergeMode := false // true = merge single proxy into existing list
 
 	switch {
 	case strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://"):
-		var err error
-		proxies, subURL, err = config.FetchSubscription(raw, 10801)
-		if err != nil {
-			return errStr(fmt.Errorf("fetch subscription: %w", err))
-		}
+		return errStr(updateSubscription(raw, true))
 	case strings.HasPrefix(raw, "ss://"), strings.HasPrefix(raw, "vmess://"), strings.HasPrefix(raw, "vless://"):
-		px, err := config.ParseSubscriptionLine(raw)
+		proxy, err := config.ParseSubscriptionLine(raw)
 		if err != nil {
 			return errStr(fmt.Errorf("invalid proxy URL: %w", err))
 		}
-		proxies = []config.ProxyConfig{px}
-		mergeMode = true // single proxy → merge, don't replace
+		return errStr(importManualProxy(proxy))
 	default:
-		// Base64 backup
-		decoded, err := base64.StdEncoding.DecodeString(raw)
-		if err != nil {
-			return errStr(fmt.Errorf("not a valid URL or base64 backup"))
-		}
-		var tmp interface{}
-		if err := json.Unmarshal(decoded, &tmp); err != nil {
-			return errStr(fmt.Errorf("not valid JSON"))
-		}
-		savePath := filepath.Join(resolveDataDir(), "config.json")
-		if err := os.WriteFile(savePath, decoded, 0644); err != nil {
-			return errStr(fmt.Errorf("cannot write config: %w", err))
-		}
-		gMu.Lock()
-		cfg, _ := config.Load(savePath)
-		if cfg != nil {
-			gConfig = cfg
-		}
-		_ = reloadAndRestart()
-		gMu.Unlock()
-		return nil
+		return errStr(fmt.Errorf("not a valid subscription URL"))
 	}
+}
 
-	if len(proxies) == 0 {
-		return errStr(fmt.Errorf("no proxies found"))
-	}
-
-	dataDir := resolveDataDir()
-	cfgPath := filepath.Join(dataDir, "config.json")
-	var cfg *config.Config
-	if existing, err := config.Load(cfgPath); err == nil {
-		cfg = existing
-	} else {
-		cfg = &config.Config{Version: "1.0"}
-	}
-
-	if mergeMode {
-		// Single proxy → merge into existing list (replace if same server+port, else append).
-		// Keep existing subscription_url intact.
-		px := proxies[0]
-		px.Enabled = true
-
-		// Find next available local_port
-		maxPort := 10800
-		for _, p := range cfg.Proxies {
-			if p.LocalPort > maxPort {
-				maxPort = p.LocalPort
-			}
-		}
-		px.LocalPort = maxPort + 1
-		if px.LocalPort < 10801 {
-			px.LocalPort = 10801
-		}
-		if px.Name == "" {
-			px.Name = px.Server
-		}
-
-		// Replace existing same server+port, otherwise append
-		replaced := false
-		for i, p := range cfg.Proxies {
-			if p.Server == px.Server && p.Port == px.Port {
-				px.Name = p.Name           // keep the old name
-				px.LocalPort = p.LocalPort // keep the old port
-				cfg.Proxies[i] = px
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			cfg.Proxies = append(cfg.Proxies, px)
-		}
-		// Do NOT clear subscription_url for single proxy imports.
-	} else {
-		for i := range proxies {
-			if proxies[i].Name == "" {
-				proxies[i].Name = fmt.Sprintf("Server%d", i+1)
-			}
-			proxies[i].LocalPort = 10801 + i
-			proxies[i].Enabled = true
-		}
-		cfg.Proxies = proxies
-		cfg.SubscriptionURL = subURL
-	}
-
-	if err := cfg.Save(cfgPath); err != nil {
-		return errStr(fmt.Errorf("save config: %w", err))
-	}
-
+func importManualProxy(proxyConfig config.ProxyConfig) error {
+	subscriptionUpdateMu.Lock()
+	defer subscriptionUpdateMu.Unlock()
 	gMu.Lock()
-	gConfig = cfg
-	_ = reloadAndRestart()
-	gMu.Unlock()
+	defer gMu.Unlock()
+	if gConfig == nil {
+		return fmt.Errorf("not started")
+	}
+	current := gConfig
+	next, err := config.MergeManualProxy(current, proxyConfig)
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(resolveDataDir(), "config.json")
+	if err := next.Save(configPath); err != nil {
+		return err
+	}
+	gConfig = next
+	if err := reloadAndRestart(); err != nil {
+		gConfig = current
+		_ = current.Save(configPath)
+		_ = reloadAndRestart()
+		return err
+	}
 	return nil
+}
+
+//export OneProxy_UpdateSubscription
+func OneProxy_UpdateSubscription() *C.char {
+	return errStr(updateConfiguredSubscription())
 }
 
 //export OneProxy_SelectProxy
@@ -477,24 +400,12 @@ func OneProxy_SelectProxy(proxyName *C.char) *C.char {
 		selectorTag = "proxy"
 	}
 
-	outboundTag := "out-" + sanitizeTag(C.GoString(proxyName))
-	payload, _ := json.Marshal(map[string]string{"name": outboundTag})
-	apiURL := fmt.Sprintf("http://127.0.0.1:9090/proxies/%s", selectorTag)
-
-	req, err := http.NewRequest("PUT", apiURL, bytes.NewReader(payload))
+	outboundTag, err := selectionOutboundTag(C.GoString(proxyName), cfg.Proxies)
 	if err != nil {
 		return errStr(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
+	if err := putSelectorSelection(selectorHTTPClient, clashAPIBaseURL, selectorTag, outboundTag); err != nil {
 		return errStr(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return errStr(fmt.Errorf("clash api returned %d", resp.StatusCode))
 	}
 	return nil
 }

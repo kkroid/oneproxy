@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added automatic refresh for a single HTTP(S) subscription after startup and every six hours, plus a manual tray action.
+- Subscription nodes now retain stable local ports and coexist with manually imported nodes; nodes missing from two consecutive successful refreshes are removed.
+
+### Fixed
+
+- The tray now reports the actual unified-port selector state, supports returning to automatic selection, and interrupts existing connections when switching nodes manually.
+- Subscription updates use strict validation, atomic config replacement, and avoid restarting sing-box when nothing affecting runtime changed.
+
+### Removed
+
+- Removed configuration backup import/export from the tray and shared-library API; clipboard subscription import remains available.
+
 ## 0.7.0 - 2026-08-11
 
 ### Changed

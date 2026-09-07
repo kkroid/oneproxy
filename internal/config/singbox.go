@@ -128,10 +128,11 @@ type URLTestOutbound struct {
 
 // SelectorOutbound configuration — manual or auto selection
 type SelectorOutbound struct {
-	Type      string   `json:"type"`
-	Tag       string   `json:"tag"`
-	Outbounds []string `json:"outbounds"`
-	Default   string   `json:"default,omitempty"`
+	Type                      string   `json:"type"`
+	Tag                       string   `json:"tag"`
+	Outbounds                 []string `json:"outbounds"`
+	Default                   string   `json:"default,omitempty"`
+	InterruptExistConnections bool     `json:"interrupt_exist_connections,omitempty"`
 }
 
 // ExperimentalConfig for sing-box experimental features
@@ -146,9 +147,9 @@ type ClashAPIConfig struct {
 
 // RouteConfig for routing rules
 type RouteConfig struct {
-	Rules    []RouteRule        `json:"rules"`
-	Final    string             `json:"final,omitempty"`
-	RuleSet  []RuleSetEntry     `json:"rule_set,omitempty"`
+	Rules   []RouteRule    `json:"rules"`
+	Final   string         `json:"final,omitempty"`
+	RuleSet []RuleSetEntry `json:"rule_set,omitempty"`
 }
 
 // RuleSetEntry defines a named rule set
@@ -314,7 +315,7 @@ func (g *SingBoxGenerator) generateOutbounds() []interface{} {
 		selTags := append([]string{"auto"}, proxyTags...)
 		outbounds = append(outbounds, SelectorOutbound{
 			Type: "selector", Tag: selectorTag,
-			Outbounds: selTags, Default: "auto",
+			Outbounds: selTags, Default: "auto", InterruptExistConnections: true,
 		})
 	}
 
@@ -345,7 +346,7 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 	case "rule":
 		// Geoip + geosite rule-sets (binary .srs)
 		rc.RuleSet = []RuleSetEntry{
-			{Type: "local", Tag: "geoip-cn",   Format: "binary", Path: filepath.Join(g.baseDir, "bin", "geoip-cn.srs")},
+			{Type: "local", Tag: "geoip-cn", Format: "binary", Path: filepath.Join(g.baseDir, "bin", "geoip-cn.srs")},
 			{Type: "local", Tag: "geosite-cn", Format: "binary", Path: filepath.Join(g.baseDir, "bin", "geosite-cn.srs")},
 		}
 		// User proxy sites → inline domain rules (standard sing-box approach)
@@ -354,7 +355,7 @@ func (g *SingBoxGenerator) generateRoute() RouteConfig {
 				RouteRule{DomainSuffix: sites, Outbound: "proxy"})
 		}
 		rc.Rules = append(rc.Rules,
-			RouteRule{RuleSet: []string{"geoip-cn"},   Outbound: "direct"},
+			RouteRule{RuleSet: []string{"geoip-cn"}, Outbound: "direct"},
 			RouteRule{RuleSet: []string{"geosite-cn"}, Outbound: "direct"})
 		// Unified port → selector (catch-all for non-China traffic)
 		if g.userConfig.Unified.Port > 0 {

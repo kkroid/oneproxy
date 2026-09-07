@@ -9,10 +9,11 @@ struct Strings {
     QString check, flushDNS, quit;
     QString timeout;
     QString unifiedLabel;
+    QString automaticSelection;
     QString autoStart;
     QString routingMode, modeGlobal, modeRule, modeDirect;
     QString openConfig;
-    QString exportConfig, importClipboard, importBackup;
+    QString importClipboard, updateSubscription;
 };
 
 inline Strings getStrings() {
@@ -23,19 +24,21 @@ inline Strings getStrings() {
         "立即检查所有节点", "立即刷新 DNS", "退出",
         "超时",
         "统一出口 %1",
+        "自动选择最快节点",
         "开机自启",
         "代理模式", "全局", "规则", "直连",
         "打开配置文件",
-        "导出配置...", "从剪贴板导入订阅", "导入备份...",
+        "从剪贴板导入订阅", "立即更新订阅",
     } : Strings{
         "🟢 Running", "🔴 Stopped",
         "Start All Proxies", "Stop All Proxies", "Restart All Proxies",
         "Check All Nodes", "Flush DNS", "Quit",
         "timeout",
         "Unified %1",
+        "Automatically select fastest node",
         "Auto-start on boot",
         "Routing Mode", "Global", "Rule", "Direct",
         "Open Config File",
-        "Export Config...", "Import Subscription from Clipboard", "Import Backup...",
+        "Import Subscription from Clipboard", "Update Subscription Now",
     };
 }

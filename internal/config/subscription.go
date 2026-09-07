@@ -18,7 +18,7 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(subURL)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch subscription: %w", err)
+		return nil, "", fmt.Errorf("subscription request failed")
 	}
 	defer resp.Body.Close()
 
@@ -44,11 +44,17 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 		if line == "" {
 			continue
 		}
+		if !strings.HasPrefix(line, "ss://") && !strings.HasPrefix(line, "vmess://") && !strings.HasPrefix(line, "vless://") {
+			continue
+		}
 		px, err := ParseSubscriptionLine(line)
 		if err != nil {
-			continue // skip unrecognized protocols (trojan, etc.)
+			return nil, "", fmt.Errorf("invalid supported proxy entry: %w", err)
 		}
 		proxies = append(proxies, px)
+	}
+	if len(proxies) == 0 {
+		return nil, "", fmt.Errorf("subscription contains no supported proxies")
 	}
 
 	for i := range proxies {

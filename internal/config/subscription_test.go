@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -65,5 +66,30 @@ func TestFetchSubscriptionIncludesVLESS(t *testing.T) {
 	}
 	if proxies[1].LocalPort != 10802 || !proxies[1].Enabled {
 		t.Errorf("unexpected VLESS proxy: %+v", proxies[1])
+	}
+}
+
+func TestFetchSubscriptionIgnoresUnsupportedProtocol(t *testing.T) {
+	ssURI := "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@ss.example.com:8388#ss-node"
+	body := base64.StdEncoding.EncodeToString([]byte(ssURI + "\n" + "trojan://unsupported\n"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	proxies, _, err := FetchSubscription(server.URL, 10801)
+	if err != nil || len(proxies) != 1 {
+		t.Fatalf("FetchSubscription() = %d proxies, %v; want one supported proxy", len(proxies), err)
+	}
+}
+
+func TestFetchSubscriptionErrorDoesNotExposeURL(t *testing.T) {
+	secretURL := "http://127.0.0.1:1/subscription?token=secret-token"
+	_, _, err := FetchSubscription(secretURL, 10801)
+	if err == nil {
+		t.Fatal("FetchSubscription() unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("FetchSubscription() exposed the subscription token: %v", err)
 	}
 }

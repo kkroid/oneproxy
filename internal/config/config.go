@@ -9,21 +9,23 @@ import (
 
 // Config represents the main configuration structure
 type Config struct {
-	Version     string        `json:"version"`
-	LogLevel    string        `json:"log_level"`
-	Unified     UnifiedConfig `json:"unified"`
-	RouteMode       string        `json:"route_mode,omitempty"`       // "global" (default), "rule", "direct"
-	ProxySites      []string      `json:"proxy_sites,omitempty"`      // domains always routed through proxy in rule mode
-	SubscriptionURL string        `json:"subscription_url,omitempty"`  // optional JMS/v2ray subscription URL
-	HealthCheck HealthCheck   `json:"health_check"`
-	DNS         DNSConfig     `json:"dns"`
-	Proxies     []ProxyConfig `json:"proxies"`
-	Inbound     InboundConfig `json:"inbound"`
+	Version               string        `json:"version"`
+	LogLevel              string        `json:"log_level"`
+	Unified               UnifiedConfig `json:"unified"`
+	RouteMode             string        `json:"route_mode,omitempty"`              // "global" (default), "rule", "direct"
+	ProxySites            []string      `json:"proxy_sites,omitempty"`             // domains always routed through proxy in rule mode
+	SubscriptionURL       string        `json:"subscription_url,omitempty"`        // optional JMS/v2ray subscription URL
+	SubscriptionMigrated  bool          `json:"subscription_migrated,omitempty"`   // legacy nodes have been classified
+	SubscriptionSourceKey string        `json:"subscription_source_key,omitempty"` // hash of the applied subscription URL
+	HealthCheck           HealthCheck   `json:"health_check"`
+	DNS                   DNSConfig     `json:"dns"`
+	Proxies               []ProxyConfig `json:"proxies"`
+	Inbound               InboundConfig `json:"inbound"`
 }
 
 type UnifiedConfig struct {
-	Port    int    `json:"port"`    // 0 = disabled, e.g. 1080
-	Tag     string `json:"tag,omitempty"`  // selector tag (default "proxy")
+	Port int    `json:"port"`          // 0 = disabled, e.g. 1080
+	Tag  string `json:"tag,omitempty"` // selector tag (default "proxy")
 }
 
 // HealthCheck configuration
@@ -36,13 +38,16 @@ type HealthCheck struct {
 
 // DNSConfig configuration
 type DNSConfig struct {
-	FlushOnFailure        bool     `json:"flush_on_failure"`
-	FlushIntervalSeconds  int      `json:"flush_interval_seconds"`
-	Servers               []string `json:"servers"`
+	FlushOnFailure       bool     `json:"flush_on_failure"`
+	FlushIntervalSeconds int      `json:"flush_interval_seconds"`
+	Servers              []string `json:"servers"`
 }
 
 // ProxyConfig represents a single proxy server configuration
 type ProxyConfig struct {
+	Source           string                 `json:"source,omitempty"`
+	SubscriptionKey  string                 `json:"subscription_key,omitempty"`
+	MissingUpdates   int                    `json:"missing_updates,omitempty"`
 	Name             string                 `json:"name"`
 	Enabled          bool                   `json:"enabled"`
 	LocalPort        int                    `json:"local_port"` // local port to expose this proxy
@@ -101,9 +106,34 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	temporary, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary config: %w", err)
 	}
+	temporaryPath := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		_ = temporary.Close()
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0644); err != nil {
+		return fmt.Errorf("failed to set temporary config permissions: %w", err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return fmt.Errorf("failed to write temporary config: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("failed to sync temporary config: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary config: %w", err)
+	}
+	if err := replaceFile(temporaryPath, path); err != nil {
+		return fmt.Errorf("failed to replace config file: %w", err)
+	}
+	removeTemporary = false
 
 	return nil
 }

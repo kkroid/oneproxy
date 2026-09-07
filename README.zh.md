@@ -92,13 +92,15 @@ VLESS Reality 配置示例：
 
 如需导入订阅，复制 HTTP(S) 订阅地址，然后在托盘菜单选择 **从剪贴板导入订阅**。
 
+OneProxy 支持一个 HTTP(S) 订阅与任意数量的手工节点共存。程序会在启动 30 秒后刷新一次，此后每 6 小时刷新；也可以通过 **立即更新订阅** 手动触发。已有订阅节点会保留本地端口和启用状态，手工节点不会被覆盖或删除。订阅节点连续两次成功刷新都未出现时才会删除；刷新失败或内容未变化时不会重启 sing-box。
+
 #### 3. 构建
 
 ```powershell
 # 一键构建（需要 Go、CMake、MSVC 2022、Qt 6.8.3 和 sing-box.exe）
 .\build.ps1
 
-# 构建便携文件和 dist/OneProxy-0.7.0-setup.exe
+# 构建便携文件和 dist/OneProxy-0.8.0-setup.exe
 .\build.ps1 -Installer
 ```
 
@@ -146,8 +148,10 @@ chrome.exe --proxy-server="socks5://127.0.0.1:10801"
 | **重启所有代理** | 重启 + 触发健康检查 |
 | **立即检查所有节点** | 手动健康检查（跳过 60 秒间隔） |
 | **立即刷新 DNS** | 刷新系统 DNS + 重启 sing-box |
+| **点击具体节点** | 将统一端口切换为手动模式并立即使用该节点；选择“自动选择最快节点”可恢复自动模式 |
 | **代理模式** | 选择全局、规则或直连模式 |
 | **从剪贴板导入订阅** | 导入 HTTP(S)、SS、VMess 或 VLESS |
+| **立即更新订阅** | 立即刷新当前 HTTP(S) 订阅 |
 | **退出** | 停止代理并退出程序 |
 
 **图标颜色：**
@@ -224,8 +228,8 @@ char* OneProxy_Status();                    // JSON 字符串
 char* OneProxy_HealthCheck();
 char* OneProxy_FlushDNS();
 char* OneProxy_SelectProxy(char* proxyName);
-char* OneProxy_ExportConfig();
-char* OneProxy_ImportConfig(char* input);
+char* OneProxy_ImportSubscription(char* input);
+char* OneProxy_UpdateSubscription();
 char* OneProxy_GetVersion();
 void  OneProxy_FreeString(char* ptr);       // 释放返回的字符串
 ```

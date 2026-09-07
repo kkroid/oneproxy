@@ -11,7 +11,6 @@
 #include <QJsonArray>
 #include <QFile>
 #include <QDir>
-#include <QFileDialog>
 #include <QClipboard>
 #include <QDebug>
 #include <QDesktopServices>
@@ -30,8 +29,8 @@ typedef char* (*PFN_Status)();
 typedef char* (*PFN_Check)();
 typedef char* (*PFN_Flush)();
 typedef char* (*PFN_Select)(char*);
-typedef char* (*PFN_Export)();
 typedef char* (*PFN_Import)(char*);
+typedef char* (*PFN_UpdateSubscription)();
 typedef void  (*PFN_Free)(char*);
 
 static PFN_Start  pStart;
@@ -41,8 +40,8 @@ static PFN_Status pStatus;
 static PFN_Check  pCheck;
 static PFN_Flush  pFlush;
 static PFN_Select pSelect;
-static PFN_Export pExport;
 static PFN_Import pImport;
+static PFN_UpdateSubscription pUpdateSubscription;
 static PFN_Free   pFree;
 
 bool loadDLL() {
@@ -59,10 +58,11 @@ bool loadDLL() {
     #define L(fn,n) fn = reinterpret_cast<decltype(fn)>(library.resolve(n))
     L(pStart,"OneProxy_Start"); L(pStop,"OneProxy_Stop"); L(pRestart,"OneProxy_Restart");
     L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
-    L(pSelect,"OneProxy_SelectProxy"); L(pExport,"OneProxy_ExportConfig"); L(pImport,"OneProxy_ImportConfig"); L(pFree,"OneProxy_FreeString");
+    L(pSelect,"OneProxy_SelectProxy"); L(pImport,"OneProxy_ImportSubscription");
+    L(pUpdateSubscription,"OneProxy_UpdateSubscription"); L(pFree,"OneProxy_FreeString");
     #undef L
     const bool resolved = pStart && pStop && pRestart && pStatus && pCheck &&
-                          pFlush && pSelect && pExport && pImport && pFree;
+                          pFlush && pSelect && pImport && pUpdateSubscription && pFree;
     if (!resolved) {
         qCritical() << "Shared library exports are incomplete";
         library.unload();
@@ -140,15 +140,18 @@ private:
 
     // Parse status JSON; returns false if unavailable.
     bool fetchStatus(bool &running, int &unifiedPort, QJsonArray &proxies,
-                     int &ok, int &total, QString &active) {
+                     int &ok, int &total, QString &selectionMode, QString &active) {
         auto json = callFree(pStatus());
         if (json.isEmpty()) return false;
         auto obj = QJsonDocument::fromJson(json.toUtf8()).object();
         running = obj["running"].toBool();
         unifiedPort = obj["unified_port"].toInt();
+        selectionMode = obj["selection_mode"].toString();
+        active = obj["selected_proxy"].toString();
         proxies = obj["proxies"].toArray();
 
-        ok = 0; total = 0; active.clear();
+        ok = 0; total = 0;
+        bool useLatencyFallback = active.isEmpty();
         int minLat = 999999;
         for (const auto& p : proxies) {
             auto px = p.toObject();
@@ -157,7 +160,7 @@ private:
             if (px["is_healthy"].toBool()) {
                 ++ok;
                 int lat = px["latency_ms"].toInt();
-                if (lat < minLat) { minLat = lat; active = px["name"].toString(); }
+                if (useLatencyFallback && lat < minLat) { minLat = lat; active = px["name"].toString(); }
             }
         }
         return true;
@@ -165,8 +168,8 @@ private:
 
     // Called by the 5s timer — only touches the icon/tooltip, never the menu.
     void tick() {
-        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString active;
-        if (!fetchStatus(running, unifiedPort, proxies, ok, total, active)) return;
+        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString selectionMode, active;
+        if (!fetchStatus(running, unifiedPort, proxies, ok, total, selectionMode, active)) return;
 
         if (!running)         { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — stopped"); }
         else if (total == 0)  { tray->setIcon(icoRed);    tray->setToolTip("OneProxy — no proxies"); }
@@ -177,8 +180,8 @@ private:
 
     // Called only on QMenu::aboutToShow — rebuilds items right before display.
     void rebuildMenu() {
-        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString active;
-        if (!fetchStatus(running, unifiedPort, proxies, ok, total, active)) return;
+        bool running; int unifiedPort, ok, total; QJsonArray proxies; QString selectionMode, active;
+        if (!fetchStatus(running, unifiedPort, proxies, ok, total, selectionMode, active)) return;
 
         auto s = getStrings();
         menu->clear();
@@ -197,10 +200,19 @@ private:
                     break;
                 }
             }
+            QString mode = selectionMode == "manual" ? "manual" : "auto";
             QString line = active.isEmpty()
-                ? QString("127.0.0.1:%1  auto  waiting...").arg(unifiedPort)
-                : QString("127.0.0.1:%1  auto ◀ %2  %3ms").arg(unifiedPort).arg(active).arg(activeLat);
-            menu->addAction(line);
+                ? QString("127.0.0.1:%1  %2  waiting...").arg(unifiedPort).arg(mode)
+                : QString("127.0.0.1:%1  %2 ◀ %3  %4ms").arg(unifiedPort).arg(mode).arg(active).arg(activeLat);
+            menu->addAction(line)->setEnabled(false);
+            auto *autoSelection = menu->addAction(s.automaticSelection);
+            autoSelection->setCheckable(true);
+            autoSelection->setChecked(selectionMode != "manual");
+            if (selectionMode == "auto") {
+                autoSelection->setEnabled(false);
+            } else {
+                connect(autoSelection, &QAction::triggered, this, [this]() { selectProxy("auto"); });
+            }
             menu->addSeparator();
         }
 
@@ -215,7 +227,8 @@ private:
             QString typ = px["type"].toString();
             QString srv = px["server"].toString();
             int srvPort = px["server_port"].toInt();
-            bool isActive = (unifiedPort > 0 && h && name == active);
+            bool isActive = (unifiedPort > 0 && name == active);
+            bool isManuallySelected = (selectionMode == "manual" && isActive);
 
             QString proto = (typ == "shadowsocks") ? "SS" : (typ == "vmess") ? "VM" : (typ == "vless") ? "VL" : typ.left(3);
             QString dot = isActive ? "●" : (h ? "○" : "✗");
@@ -226,7 +239,9 @@ private:
                     .arg(dot).arg(name).arg(srvPort).arg(port).arg(proto).arg(s.timeout);
 
             auto* a = menu->addAction(label);
-            if (h && unifiedPort > 0 && !isActive) {
+            a->setCheckable(isManuallySelected);
+            a->setChecked(isManuallySelected);
+            if (h && unifiedPort > 0 && !isManuallySelected) {
                 connect(a, &QAction::triggered, this, [this, name]() { selectProxy(name); });
             } else {
                 a->setEnabled(false);
@@ -276,9 +291,11 @@ private:
 
         menu->addSeparator();
         menu->addAction(s.openConfig, this, [this]() { doOpenConfig(); });
-        menu->addAction(s.exportConfig, this, &OneProxyTray::doExportConfig);
         menu->addAction(s.importClipboard, this, &OneProxyTray::doImportClipboard);
-        menu->addAction(s.importBackup, this, &OneProxyTray::doImportBackup);
+        auto statusJson = QJsonDocument::fromJson(callFree(pStatus()).toUtf8()).object();
+        auto *updateSubscription = menu->addAction(s.updateSubscription, this, &OneProxyTray::doUpdateSubscription);
+        updateSubscription->setEnabled(statusJson["subscription_configured"].toBool() &&
+                                       !statusJson["subscription_updating"].toBool());
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
     }
@@ -323,19 +340,6 @@ private:
         }
     }
 
-    void doExportConfig() {
-        QString path = QFileDialog::getSaveFileName(nullptr, "Export Config",
-            QDir::homePath() + "/oneproxy-config.json", "JSON (*.json)");
-        if (path.isEmpty()) return;
-        auto b64 = callFree(pExport());
-        if (b64.isEmpty()) { tray->showMessage("OneProxy", "Export failed", QSystemTrayIcon::Critical, 3000); return; }
-        QFile f(path);
-        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            f.write(b64.toUtf8()); f.close();
-            tray->showMessage("OneProxy", "Config exported", QSystemTrayIcon::Information, 2000);
-        }
-    }
-
     void doImportClipboard() {
         QClipboard *clipboard = QApplication::clipboard();
         QString text = clipboard->text().trimmed();
@@ -356,19 +360,19 @@ private:
         tray->showMessage("OneProxy", "Subscription imported, restarting...", QSystemTrayIcon::Information, 2000);
     }
 
-    void doImportBackup() {
-        QString path = QFileDialog::getOpenFileName(nullptr, "Import Backup",
-            QDir::homePath(), "Config Backup (*.*)");
-        if (path.isEmpty()) return;
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-        auto b64 = QString::fromUtf8(f.readAll()).trimmed(); f.close();
-        auto err = callFree(pImport((char*)b64.toUtf8().constData()));
-        if (!err.isEmpty()) {
-            tray->showMessage("OneProxy", "Import failed: " + err, QSystemTrayIcon::Critical, 5000);
-            return;
-        }
-        tray->showMessage("OneProxy", "Config imported, restarting...", QSystemTrayIcon::Information, 2000);
+    void doUpdateSubscription() {
+        runAsync([this]() {
+            auto err = callFree(pUpdateSubscription());
+            QMetaObject::invokeMethod(this, [this, err]() {
+                if (!err.isEmpty()) {
+                    tray->showMessage("OneProxy", "Subscription update failed: " + err,
+                                      QSystemTrayIcon::Critical, 5000);
+                } else {
+                    tray->showMessage("OneProxy", "Subscription is up to date",
+                                      QSystemTrayIcon::Information, 2000);
+                }
+            }, Qt::QueuedConnection);
+        }, 0);
     }
 
     static bool isAutoStart() {

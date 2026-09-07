@@ -90,13 +90,15 @@ See [`configs/config.example.json`](configs/config.example.json) for examples of
 
 To import a subscription, copy its HTTP(S) URL and choose **Import Subscription from Clipboard** from the tray menu.
 
+OneProxy supports one HTTP(S) subscription alongside any number of manually imported nodes. It refreshes the subscription 30 seconds after startup and every 6 hours, while **Update Subscription Now** triggers an immediate refresh. Existing subscription nodes keep their local ports and enabled state; manual nodes are never overwritten or removed. A subscription node is removed only after it is absent from two consecutive successful refreshes. Failed or unchanged refreshes do not restart sing-box.
+
 #### 3. Build
 
 ```powershell
 # One-command build (requires Go, CMake, MSVC 2022, Qt 6.8.3, and sing-box.exe)
 .\build.ps1
 
-# Build the portable files and dist/OneProxy-0.7.0-setup.exe
+# Build the portable files and dist/OneProxy-0.8.0-setup.exe
 .\build.ps1 -Installer
 ```
 
@@ -186,8 +188,10 @@ This is **server-side routing** — it affects all traffic passing through the p
 | **Restart All Proxies** | Restart and trigger health check |
 | **Check All Nodes** | Run an immediate health check |
 | **Flush DNS** | Flush system DNS and restart sing-box |
+| **Click a node** | Switch the unified port to that node immediately; choose “Automatically select fastest node” to return to auto mode |
 | **Routing Mode** | Select Global, Rule, or Direct mode |
 | **Import Subscription** | Import an HTTP(S), SS, VMess, or VLESS source |
+| **Update Subscription Now** | Refresh the configured HTTP(S) subscription immediately |
 | **Quit** | Stop proxies and quit |
 
 **Icon Colors:**
@@ -228,8 +232,8 @@ char* OneProxy_Status();                    // JSON string
 char* OneProxy_HealthCheck();
 char* OneProxy_FlushDNS();
 char* OneProxy_SelectProxy(char* proxyName);
-char* OneProxy_ExportConfig();
-char* OneProxy_ImportConfig(char* input);
+char* OneProxy_ImportSubscription(char* input);
+char* OneProxy_UpdateSubscription();
 char* OneProxy_GetVersion();
 void  OneProxy_FreeString(char* ptr);       // Free returned strings
 ```

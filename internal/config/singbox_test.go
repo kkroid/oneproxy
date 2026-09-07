@@ -54,3 +54,30 @@ func TestGenerateVLESSRealityOutbound(t *testing.T) {
 		t.Fatalf("unexpected Reality options: %v", tls["reality"])
 	}
 }
+
+func TestGenerateSelectorInterruptsExistingConnections(t *testing.T) {
+	cfg := &Config{
+		Unified: UnifiedConfig{Port: 1082},
+		Proxies: []ProxyConfig{{
+			Name: "node", Enabled: true, Type: "shadowsocks",
+			Server: "example.com", Port: 443, Method: "aes-256-gcm", Password: "secret",
+		}},
+	}
+
+	generated, err := NewSingBoxGenerator(cfg, t.TempDir()).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, outbound := range generated.Outbounds {
+		selector, ok := outbound.(SelectorOutbound)
+		if !ok {
+			continue
+		}
+		if !selector.InterruptExistConnections {
+			t.Fatal("selector does not interrupt existing connections")
+		}
+		return
+	}
+	t.Fatal("selector outbound not generated")
+}
