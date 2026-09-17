@@ -48,6 +48,7 @@ jobs:
   platform-build:
     name: Build (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-2022
