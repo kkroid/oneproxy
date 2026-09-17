@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,12 +33,28 @@ func TestPlatformProcessStopWithoutCommandUnix(t *testing.T) {
 
 func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
-	cmd := exec.Command("sh", "-c", "trap '' TERM; : > \"$1\"; while :; do sleep 1; done", "sh", ready)
+	// exec keeps a single process that ignores SIGTERM. A shell spawning sleep
+	// leaves an orphan after group SIGKILL; its reaping depends on the host init.
+	cmd := exec.Command("sh", "-c", "trap '' TERM; : > \"$1\"; exec sleep 30", "sh", ready)
 	configureProcessCommand(cmd)
 	process := platformProcess{stopTimeout: 100 * time.Millisecond}
 	if err := process.start(cmd); err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+			return
+		default:
+			_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+	})
 	for attempt := 0; attempt < 100; attempt++ {
 		if _, err := os.Stat(ready); err == nil {
 			break
@@ -47,12 +64,6 @@ func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	if _, err := os.Stat(ready); err != nil {
 		t.Fatalf("helper did not become ready: %v", err)
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
-
 	started := time.Now()
 	if err := process.stop(cmd, done); err != nil {
 		t.Fatalf("stop() error = %v", err)
@@ -60,7 +71,11 @@ func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	if elapsed := time.Since(started); elapsed < 80*time.Millisecond {
 		t.Fatalf("stop returned before graceful timeout: %v", elapsed)
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, 0); err == nil {
-		t.Fatalf("process group %d still exists", cmd.Process.Pid)
+	status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("helper exit = %v, want SIGKILL", cmd.ProcessState)
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("process group %d: signal 0 returned %v, want ESRCH", cmd.Process.Pid, err)
 	}
 }
