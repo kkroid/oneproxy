@@ -389,7 +389,7 @@ Runtime configuration and logs are stored under `%USERPROFILE%\.oneproxy\`.
 A: OneProxy exposes each node as a separate port, enabling per-application proxy routing without profile switching.
 
 **Q: Does this work on macOS/Linux?**  
-A: Ubuntu 24.04 x86_64 has a runtime-verified foreground CLI workflow. macOS is compile-checked and produces an unsigned `.app` zip artifact. Windows remains the only packaged release; Ubuntu has no package or systemd integration yet. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the broader platform boundary.
+A: Ubuntu 24.04 x86_64 has a runtime-verified foreground CLI workflow. macOS produces an ad-hoc-signed `.app` zip for Apple Silicon, without Developer ID signing or notarization. Windows remains the only packaged release; Ubuntu has no package or systemd integration yet. See [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for macOS first-launch instructions and the broader platform boundary.
 
 **Q: Can I use HTTP proxies instead of SOCKS5?**  
 A: Yes. Every OneProxy local port accepts both SOCKS5 and HTTP CONNECT.

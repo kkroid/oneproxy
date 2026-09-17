@@ -7,10 +7,10 @@ OneProxy 由 Go 核心、Qt 托盘和 sing-box 三部分组成。项目已经建
 | 平台 | CI 编译 | 实际运行验证 | 安装包/发行物 |
 |------|---------|--------------|---------------|
 | Windows 2022 | ✅ | ✅ | ✅ |
-| macOS 15 | ✅ | ❌ | CI zip（未签名） |
+| macOS 15 | ✅ | ❌ | CI zip（ad-hoc 临时签名，未公证） |
 | Ubuntu 24.04 | ✅ | ❌ | ❌ |
 
-macOS 和 Linux 的 CI 通过仅表示对应平台的构建检查通过，不表示代理进程管理、DNS 刷新、托盘行为或系统集成已经可用。macOS CI 还会生成包含 Qt 运行库、Go 共享库、sing-box 和规则集的未签名 `.app` zip，仅用于验证打包链路。
+macOS 和 Linux 的 CI 通过仅表示对应平台的构建检查通过，不表示代理进程管理、DNS 刷新、托盘行为或系统集成已经可用。macOS CI 还会生成包含 Qt 运行库、Go 共享库、sing-box 和规则集的 `.app` zip，完成 ad-hoc 临时签名，并校验解压后的签名完整性及 Go 共享库加载。这不代表 Apple 开发者身份认证或公证。
 
 ## 构建基线
 
@@ -44,7 +44,26 @@ Windows 发布任务只有在 Windows、macOS 和 Linux 三个平台的编译检
 
 ## macOS
 
-当前状态为“仅保证 CI 构建和未签名 `.app` 打包”。项目不提供 DMG、签名或公证，也没有在真实 macOS 环境中验证运行行为。
+当前状态为“CI 构建、ad-hoc 签名和 `.app` 打包验证”。项目不提供 DMG、Developer ID 签名或 Apple 公证，也没有完成用户桌面上的运行验收。
+
+### 下载和首次打开
+
+当前 `OneProxy-macos-ARM64` 产物用于 Apple Silicon（M 系列），不支持 Intel Mac。解压 GitHub artifact ZIP，再解压其中的 `OneProxy-macos-arm64.zip`，将 `oneproxy-tray.app` 拖入“应用程序”。双击的是整个 `.app`，不是 `Contents/MacOS` 内部的可执行文件。
+
+此版本未公证，macOS 可能阻止首次打开。先尝试打开一次，再到“系统设置 → 隐私与安全性”选择“仍要打开”。如果提示“已损坏”，先检查包的完整性：
+
+```bash
+codesign --verify --deep --strict --verbose=2 /Applications/oneproxy-tray.app
+```
+
+若校验失败，请重新下载新版，不要直接移除系统隔离标记。若校验通过、确认应用来自本仓库的构建，但仍受下载隔离拦截，可仅移除此应用的隔离标记后再打开：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/oneproxy-tray.app
+open /Applications/oneproxy-tray.app
+```
+
+这不关闭系统 Gatekeeper，也不使应用获得 Apple 公证。CI 的签名校验通过不能代替真实下载后的 Gatekeeper 验证。
 
 后续正式支持前至少需要验证：
 
@@ -72,7 +91,7 @@ Windows 发布任务只有在 Windows、macOS 和 Linux 三个平台的编译检
 
 - 在 macOS 或 Linux 上启动真实代理进行运行测试
 - 修改系统 DNS 或安装提权 helper
-- macOS 签名、公证和 DMG
+- macOS Developer ID 签名、公证和 DMG
 - Linux AppImage、Flatpak 或发行版软件包
 - macOS/Linux Release 附件
 

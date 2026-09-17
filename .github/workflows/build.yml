@@ -169,8 +169,47 @@ jobs:
           test -f "$app_dir/bin/geoip-cn.srs"
           test -f "$app_dir/bin/geosite-cn.srs"
 
+          # Deployment rewrites Mach-O load commands; sign the final contents
+          # from the inside out, including our dynamically loaded Go library.
+          if ! codesign --verify --deep --strict --verbose=2 "$PWD/$app"; then
+            echo 'Deployment output needs signing before distribution.'
+          fi
+          while IFS= read -r -d '' binary; do
+            if file -b "$binary" | grep -q 'Mach-O'; then
+              codesign --force --sign - --timestamp=none "$binary"
+            fi
+          done < <(find "$PWD/$app/Contents" -type f -print0)
+          while IFS= read -r -d '' bundle; do
+            codesign --force --sign - --timestamp=none "$bundle"
+          done < <(find "$PWD/$app/Contents" -depth -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) -print0)
+          codesign --force --sign - --timestamp=none "$PWD/$app"
+          codesign --verify --deep --strict --verbose=2 "$PWD/$app"
+
           mkdir -p dist
           ditto -c -k --keepParent "$PWD/$app" "dist/OneProxy-macos-${platform}.zip"
+
+          # Check the actual distributed archive after extraction, not just the
+          # build directory. This does not start a proxy or change system DNS.
+          verify_dir="$(mktemp -d "$RUNNER_TEMP/oneproxy-macos-verify.XXXXXX")"
+          ditto -x -k "dist/OneProxy-macos-${platform}.zip" "$verify_dir"
+          verified_app="$verify_dir/oneproxy-tray.app"
+          codesign --verify --deep --strict --verbose=2 "$verified_app"
+          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/liboneproxy.dylib"
+          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/bin/sing-box"
+          "$verified_app/Contents/MacOS/bin/sing-box" version
+          python3 - "$verified_app/Contents/MacOS/liboneproxy.dylib" <<'PY'
+          import ctypes
+          import sys
+          library = ctypes.CDLL(sys.argv[1])
+          library.OneProxy_GetVersion.restype = ctypes.c_void_p
+          library.OneProxy_FreeString.argtypes = [ctypes.c_void_p]
+          version = library.OneProxy_GetVersion()
+          assert version, 'OneProxy_GetVersion returned NULL'
+          try:
+              print('Packaged Go library version:', ctypes.string_at(version).decode())
+          finally:
+              library.OneProxy_FreeString(version)
+          PY
 
       - name: Upload macOS app bundle
         if: runner.os == 'macOS'

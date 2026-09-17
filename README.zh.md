@@ -385,7 +385,7 @@ trayapp/build/
 A: OneProxy 将每个节点暴露为独立端口，支持按应用路由代理，无需切换配置文件。
 
 **Q: 支持 macOS/Linux 吗？**  
-A: Ubuntu 24.04 x86_64 已有前台 CLI 运行时验证；macOS 会进行编译检查并生成未签名的 `.app` zip artifact。Windows 仍是唯一提供安装包的系统，Ubuntu 暂无安装包和 systemd 集成。更完整的平台边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
+A: Ubuntu 24.04 x86_64 已有前台 CLI 运行时验证；macOS 会生成面向 Apple Silicon 的 ad-hoc 临时签名 `.app` zip，未做 Developer ID 签名或公证。Windows 仍是唯一提供安装包的系统，Ubuntu 暂无安装包和 systemd 集成。macOS 首次打开步骤及完整平台边界见 [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md)。
 
 **Q: 可以用 HTTP 代理代替 SOCKS5 吗？**  
 A: 可以。OneProxy 的每个本地端口都同时接受 SOCKS5 和 HTTP CONNECT。
