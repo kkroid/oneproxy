@@ -77,8 +77,8 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	cp := C.GoString(configPath)
 	found, err := resolveConfig(cp)
 	if err != nil {
-		// Fresh install or config deleted — copy placeholder from exe dir
-		placeholder := filepath.Join(exeDir(), "config-placeholder.json")
+		// Fresh install or config deleted — copy the bundled placeholder.
+		placeholder := filepath.Join(resourceDir(exeDir()), "config-placeholder.json")
 		target := filepath.Join(resolveDataDir(), "config.json")
 		if src, e := os.ReadFile(placeholder); e == nil {
 			if e := os.WriteFile(target, src, 0644); e == nil {
@@ -116,16 +116,16 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	genCfg := filepath.Join(dataDir, "singbox_generated.json")
 	ed := exeDir()
 
-	gen := config.NewSingBoxGenerator(cfg, ed)
+	gen := config.NewSingBoxGenerator(cfg, resourceDir(ed))
 	if err := gen.SaveToFile(genCfg); err != nil {
 		return errStr(err)
 	}
 
-	// sing-box binary - try cwd/bin/ first, then exe dir/bin/
+	// Find sing-box in the development layout or the installed app bundle.
 	cwd, _ := filepath.Abs(".")
 
 	for _, dir := range []string{cwd, ed} {
-		ab := filepath.Join(dir, "bin", singBoxExecutableName())
+		ab := singBoxPath(dir)
 		ab, _ = filepath.Abs(ab)
 		if _, err := os.Stat(ab); err == nil {
 			manager := proxy.NewManagerWithLog(ab, genCfg, filepath.Join(dataDir, "logs", "singbox.log"))
@@ -313,7 +313,7 @@ func reloadAndRestart() error {
 	}
 	ed := exeDir()
 	genCfg := filepath.Join(resolveDataDir(), "singbox_generated.json")
-	gen := config.NewSingBoxGenerator(gConfig, ed)
+	gen := config.NewSingBoxGenerator(gConfig, resourceDir(ed))
 	if err := gen.SaveToFile(genCfg); err != nil {
 		return err
 	}

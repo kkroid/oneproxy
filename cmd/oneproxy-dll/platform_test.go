@@ -36,3 +36,22 @@ func TestDataDirWithEmptyHomeIsAbsolute(t *testing.T) {
 		t.Fatalf("dataDirForHome(\"\") = %q, want .oneproxy directory", dir)
 	}
 }
+
+func TestInstalledAssetPaths(t *testing.T) {
+	root := t.TempDir()
+	bundleDir := filepath.Join(root, "OneProxy.app", "Contents", "MacOS")
+	for _, dir := range []string{root, filepath.Join(root, "MacOS"), bundleDir} {
+		wantResources := dir
+		wantBinary := filepath.Join(dir, "bin", singBoxExecutableName())
+		if runtime.GOOS == "darwin" && dir == bundleDir {
+			wantResources = filepath.Join(root, "OneProxy.app", "Contents", "Resources")
+			wantBinary = filepath.Join(bundleDir, "sing-box")
+		}
+		if got := resourceDir(dir); got != wantResources {
+			t.Errorf("resourceDir(%q) = %q, want %q", dir, got, wantResources)
+		}
+		if got := singBoxPath(dir); got != wantBinary {
+			t.Errorf("singBoxPath(%q) = %q, want %q", dir, got, wantBinary)
+		}
+	}
+}

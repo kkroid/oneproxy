@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // resolveDataDir returns ~/.oneproxy/ as an absolute path and creates it.
@@ -52,4 +53,24 @@ func exeDir() string {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func isMacOSBundleDir(dir string) bool {
+	return runtime.GOOS == "darwin" && filepath.Base(dir) == "MacOS" &&
+		filepath.Base(filepath.Dir(dir)) == "Contents"
+}
+
+// Bundled data belongs in Resources, outside the signed executable directory.
+func resourceDir(dir string) string {
+	if isMacOSBundleDir(dir) {
+		return filepath.Join(filepath.Dir(dir), "Resources")
+	}
+	return dir
+}
+
+func singBoxPath(dir string) string {
+	if isMacOSBundleDir(dir) {
+		return filepath.Join(dir, singBoxExecutableName())
+	}
+	return filepath.Join(dir, "bin", singBoxExecutableName())
 }

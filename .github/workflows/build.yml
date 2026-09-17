@@ -156,18 +156,20 @@ jobs:
 
           app='trayapp/build/oneproxy-tray.app'
           app_dir="$PWD/$app/Contents/MacOS"
-          mkdir -p "$app_dir/bin"
-          cp "$sing_box_path" "$app_dir/bin/sing-box"
-          cp config-placeholder.json "$app_dir/config-placeholder.json"
-          "$app_dir/bin/sing-box" rule-set compile bin/geoip-cn.json -o "$app_dir/bin/geoip-cn.srs"
-          "$app_dir/bin/sing-box" rule-set compile bin/geosite-cn.json -o "$app_dir/bin/geosite-cn.srs"
+          resources_dir="$PWD/$app/Contents/Resources"
+          mkdir -p "$resources_dir/bin"
+          cp "$sing_box_path" "$app_dir/sing-box"
+          cp config-placeholder.json "$resources_dir/config-placeholder.json"
+          "$app_dir/sing-box" rule-set compile bin/geoip-cn.json -o "$resources_dir/bin/geoip-cn.srs"
+          "$app_dir/sing-box" rule-set compile bin/geosite-cn.json -o "$resources_dir/bin/geosite-cn.srs"
 
           "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$app" -always-overwrite
           test -x "$app_dir/oneproxy-tray"
           test -f "$app_dir/liboneproxy.dylib"
-          test -x "$app_dir/bin/sing-box"
-          test -f "$app_dir/bin/geoip-cn.srs"
-          test -f "$app_dir/bin/geosite-cn.srs"
+          test -x "$app_dir/sing-box"
+          test -f "$resources_dir/config-placeholder.json"
+          test -f "$resources_dir/bin/geoip-cn.srs"
+          test -f "$resources_dir/bin/geosite-cn.srs"
 
           # Deployment rewrites Mach-O load commands; sign the final contents
           # from the inside out, including our dynamically loaded Go library.
@@ -175,6 +177,9 @@ jobs:
             echo 'Deployment output needs signing before distribution.'
           fi
           while IFS= read -r -d '' binary; do
+            # Signing the main executable also seals its enclosing bundle.
+            # Defer it until all nested code has been signed.
+            if [ "$binary" = "$app_dir/oneproxy-tray" ]; then continue; fi
             if file -b "$binary" | grep -q 'Mach-O'; then
               codesign --force --sign - --timestamp=none "$binary"
             fi
@@ -195,8 +200,8 @@ jobs:
           verified_app="$verify_dir/oneproxy-tray.app"
           codesign --verify --deep --strict --verbose=2 "$verified_app"
           codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/liboneproxy.dylib"
-          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/bin/sing-box"
-          "$verified_app/Contents/MacOS/bin/sing-box" version
+          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/sing-box"
+          "$verified_app/Contents/MacOS/sing-box" version
           python3 - "$verified_app/Contents/MacOS/liboneproxy.dylib" <<'PY'
           import ctypes
           import sys
