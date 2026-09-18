@@ -1,6 +1,119 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestMergeSubscriptionRemovesBundledExample(t *testing.T) {
+	for _, migrated := range []bool{false, true} {
+		current, err := Load("../../config-placeholder.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		incoming := []ProxyConfig{subscriptionTestConfig().Proxies[1]}
+		url := "https://subscription.example.com"
+		if migrated {
+			prepared, err := prepareSubscriptionProxies(incoming)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared[0].Enabled = true
+			prepared[0].LocalPort = 10802
+			current.Proxies = append(current.Proxies, prepared[0])
+			current.SubscriptionURL = url
+			current.SubscriptionSourceKey = subscriptionSourceKey(url)
+			current.SubscriptionMigrated = true
+		}
+		before, _ := cloneConfig(current)
+		next, result, err := MergeSubscription(current, incoming, url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(next.Proxies) != 1 || next.Proxies[0].Name != incoming[0].Name || result.Removed != 1 || !result.Changed || !result.RuntimeChanged {
+			t.Fatalf("migrated=%v: example not removed: %+v, %+v", migrated, next.Proxies, result)
+		}
+		wantPort := 10801
+		if migrated {
+			wantPort = 10802
+		}
+		if next.Proxies[0].LocalPort != wantPort {
+			t.Fatalf("port = %d, want %d", next.Proxies[0].LocalPort, wantPort)
+		}
+		if !reflect.DeepEqual(current, before) {
+			t.Fatal("merge mutated the original config")
+		}
+		_, again, err := MergeSubscription(next, incoming, url)
+		if err != nil || again.Changed {
+			t.Fatalf("repeat update = %+v, %v", again, err)
+		}
+	}
+}
+
+func TestMergeSubscriptionPreservesCustomizedExample(t *testing.T) {
+	for _, field := range []string{"server", "password", "name", "source", "extra"} {
+		t.Run(field, func(t *testing.T) {
+			current, err := Load("../../config-placeholder.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "server":
+				current.Proxies[0].Server = "real.example.org"
+			case "password":
+				current.Proxies[0].Password = "custom-password"
+			case "name":
+				current.Proxies[0].Name = "My Node"
+			case "source":
+				current.Proxies[0].Source = "manual"
+			case "extra":
+				current.Proxies[0].Extra = map[string]interface{}{"custom": true}
+			}
+			next, result, err := MergeSubscription(current, []ProxyConfig{subscriptionTestConfig().Proxies[1]}, "https://subscription.example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(next.Proxies) != 2 || result.Removed != 0 || !reflect.DeepEqual(current.Proxies[0], next.Proxies[0]) {
+				t.Fatalf("customized example changed: %+v", next.Proxies)
+			}
+		})
+	}
+}
+
+func TestMergeSubscriptionInvalidImportKeepsExample(t *testing.T) {
+	current, err := Load("../../config-placeholder.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := cloneConfig(current)
+	for _, incoming := range [][]ProxyConfig{nil, {{Name: "Invalid", Type: "unsupported"}}} {
+		if _, _, err := MergeSubscription(current, incoming, "https://subscription.example.com"); err == nil {
+			t.Fatal("invalid import succeeded")
+		}
+		if !reflect.DeepEqual(current, before) {
+			t.Fatal("failed import changed the original config")
+		}
+	}
+}
+
+func TestMergeSubscriptionDoesNotMatchExampleAsLegacyNode(t *testing.T) {
+	current, err := Load("../../config-placeholder.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.SubscriptionURL = "https://subscription.example.com"
+	current.Proxies[0].Enabled = false
+	current.Proxies[0].LocalPort = 10820
+	incoming := subscriptionTestConfig().Proxies[1]
+	incoming.Name = "Example-Server"
+	next, result, err := MergeSubscription(current, []ProxyConfig{incoming}, current.SubscriptionURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Proxies) != 1 || result.Removed != 1 || result.Added != 1 || !next.Proxies[0].Enabled || next.Proxies[0].LocalPort != 10801 || next.Proxies[0].Server != incoming.Server {
+		t.Fatalf("real subscription node inherited placeholder state: %+v, %+v", next.Proxies, result)
+	}
+}
 
 func TestMergeSubscriptionPreservesManualNodesAndPorts(t *testing.T) {
 	current := subscriptionTestConfig()

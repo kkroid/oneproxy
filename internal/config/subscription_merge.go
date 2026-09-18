@@ -63,6 +63,11 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 
 	merged := make([]ProxyConfig, 0, len(current.Proxies)+len(prepared))
 	for currentIndex, existing := range current.Proxies {
+		if isBundledExample(existing) {
+			result.Removed++
+			result.RuntimeChanged = true
+			continue
+		}
 		incomingIndex := -1
 		for candidateIncoming, candidateCurrent := range matchedIncoming {
 			if candidateCurrent == currentIndex {
@@ -141,6 +146,19 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 func subscriptionSourceKey(subscriptionURL string) string {
 	hash := sha256.Sum256([]byte(subscriptionURL))
 	return hex.EncodeToString(hash[:16])
+}
+
+// Match the shipped placeholder conservatively, including legacy configs with
+// no source marker. Keep customized nodes; local port and enabled state do not
+// turn the example endpoint into a usable server.
+func isBundledExample(proxy ProxyConfig) bool {
+	proxy.Enabled = false
+	proxy.LocalPort = 0
+	return reflect.DeepEqual(proxy, ProxyConfig{
+		Name: "Example-Server", Type: "shadowsocks",
+		Server: "your-server.example.com", Port: 8388,
+		Method: "aes-256-gcm", Password: "your-password-here",
+	})
 }
 
 func MergeManualProxy(current *Config, incoming ProxyConfig) (*Config, error) {
@@ -249,7 +267,7 @@ func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map
 	matchBy := func(predicate func(ProxyConfig) bool) (int, bool, error) {
 		matched := -1
 		for index, proxy := range proxies {
-			if used[index] || (!allowLegacy && proxy.Source != ProxySourceSubscription) || !predicate(proxy) {
+			if used[index] || isBundledExample(proxy) || (!allowLegacy && proxy.Source != ProxySourceSubscription) || !predicate(proxy) {
 				continue
 			}
 			if proxy.Source != "" && proxy.Source != ProxySourceSubscription {
