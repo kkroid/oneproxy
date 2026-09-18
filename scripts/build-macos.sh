@@ -98,7 +98,7 @@ else
 fi
 
 for target_arch in "${target_arches[@]}"; do
-  lipo -verify_arch "$target_arch" "$qt_root/lib/QtCore.framework/QtCore"
+  lipo "$qt_root/lib/QtCore.framework/QtCore" -verify_arch "$target_arch"
 done
 
 go_arch_for() {
@@ -221,7 +221,7 @@ cp config-placeholder.json "$resources_dir/config-placeholder.json"
 
 while IFS= read -r -d '' binary; do
   if file -b "$binary" | grep -q 'Mach-O'; then
-    lipo -verify_arch "${target_arches[@]}" "$binary"
+    lipo "$binary" -verify_arch "${target_arches[@]}"
     # The main executable seals the app; sign it last via the bundle path.
     [[ "$binary" == "$app_dir/oneproxy-tray" ]] && continue
     codesign --force --sign - --timestamp=none "$binary"
@@ -232,7 +232,7 @@ while IFS= read -r -d '' bundle; do
 done < <(find "$app/Contents" -depth -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) -print0)
 codesign --force --sign - --timestamp=none "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
-lipo -verify_arch "${target_arches[@]}" "$output_dir/oneproxy"
+lipo "$output_dir/oneproxy" -verify_arch "${target_arches[@]}"
 codesign --force --sign - --timestamp=none "$output_dir/oneproxy"
 
 ditto -c -k --keepParent "$app" "$root/dist/OneProxy-macos-$arch.zip"
