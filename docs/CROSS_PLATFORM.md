@@ -48,7 +48,7 @@ Windows 发布任务只有在 Windows、macOS 和 Linux 三个平台的编译检
 
 ### 下载和首次打开
 
-当前 `OneProxy-macos-ARM64` 产物用于 Apple Silicon（M 系列），不支持 Intel Mac。解压 GitHub artifact ZIP，再解压其中的 `OneProxy-macos-arm64.zip`，将 `oneproxy-tray.app` 拖入“应用程序”。双击的是整个 `.app`，不是 `Contents/MacOS` 内部的可执行文件。
+CI 提供 `OneProxy-macos-x86_64`（Intel）、`OneProxy-macos-arm64`（M 系列）和 `OneProxy-macos-universal`（两种架构）产物。解压 GitHub artifact ZIP，再解压其中的应用 ZIP，将 `oneproxy-tray.app` 拖入“应用程序”。双击的是整个 `.app`，不是 `Contents/MacOS` 内部的可执行文件。
 
 此版本未公证，macOS 可能阻止首次打开。先尝试打开一次，再到“系统设置 → 隐私与安全性”选择“仍要打开”。如果提示“已损坏”，先检查包的完整性：
 
@@ -64,6 +64,29 @@ open /Applications/oneproxy-tray.app
 ```
 
 这不关闭系统 Gatekeeper，也不使应用获得 Apple 公证。CI 的签名校验通过不能代替真实下载后的 Gatekeeper 验证。
+
+### 从源码编译和打包
+
+需要 macOS、Xcode 命令行工具、Go 1.26+、CMake 3.21+、Python 3 和 Qt 6.8.3。若 CMake 安装在 Python 虚拟环境内，请先激活环境。Qt 安装目录必须包含 `bin/macdeployqt`，并提供目标架构的库；官方双架构 Qt 可用于交叉编译及 universal 包。不依赖 Homebrew。
+
+```bash
+# 在源码目录执行；--qt-root 按实际 Qt 安装位置填写
+bash scripts/build-macos.sh --arch x86_64 --qt-root "$HOME/Qt"
+bash scripts/build-macos.sh --arch arm64 --qt-root "$HOME/Qt"
+bash scripts/build-macos.sh --arch universal --qt-root "$HOME/Qt"
+```
+
+`--arch` 默认使用当前主机架构；`--qt-root` 默认读取 `QT_ROOT_DIR`，未设置时使用 `$HOME/Qt`。标准 aqt 安装位置可能是 `$HOME/Qt/6.8.3/macos`，需显式传入该路径。`--skip-tests` 可跳过 Go 测试、vet 和托盘测试，但保留打包、架构、签名及可在本机运行的组件检查。
+
+脚本从自身位置定位仓库，不依赖终端当前目录。它构建 CLI 和共享库、编译托盘、下载并校验固定版本 sing-box、生成规则集、部署 Qt，最后进行 ad-hoc 签名和 ZIP 解压回验。只执行测试与组件检查，不启动代理或修改系统 DNS。
+
+| 产物 | 路径（`<arch>` 为参数值） |
+|------|-------------------------|
+| CLI 和 Go 动态库 | `dist/macos-<arch>/` |
+| 完整应用 | `trayapp/build-macos-<arch>/oneproxy-tray.app` |
+| 分发压缩包 | `dist/OneProxy-macos-<arch>.zip` |
+
+交叉编译时用主机版本的 sing-box 生成规则集，包内放入目标版本；universal 包合并两种架构的 CLI、动态库和 sing-box。Go 测试在主机架构上执行，单架构交叉构建不执行目标托盘及组件运行检查，仍检查所有包内 Mach-O 文件是否包含目标架构。完整桌面行为需在对应架构的 Mac 上验证。
 
 后续正式支持前至少需要验证：
 

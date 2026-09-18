@@ -57,9 +57,6 @@ jobs:
           - os: ubuntu-24.04
             host: linux
             arch: linux_gcc_64
-          - os: macos-15
-            host: mac
-            arch: clang_64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -96,13 +93,6 @@ jobs:
           go build -buildvcs=false -buildmode=c-shared -o oneproxy.dll ./cmd/oneproxy-dll
           if ($LASTEXITCODE -ne 0) { throw "Shared library build failed: $LASTEXITCODE" }
 
-      - name: Build Go targets on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          go build -buildvcs=false -o oneproxy ./cmd/oneproxy
-          go build -buildvcs=false -buildmode=c-shared -o liboneproxy.dylib ./cmd/oneproxy-dll
-
       - name: Build Go targets on Linux
         if: runner.os == 'Linux'
         shell: bash
@@ -116,7 +106,7 @@ jobs:
         run: cmake -S trayapp -B trayapp/build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" -DBUILD_TESTING=ON
 
       - name: Configure tray on Unix
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         shell: bash
         run: cmake -S trayapp -B trayapp/build -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DBUILD_TESTING=ON
 
@@ -128,105 +118,47 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir trayapp/build -C Release --output-on-failure
 
-      - name: Package macOS app bundle
-        if: runner.os == 'macOS'
+  macos-build:
+    name: macOS package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64, universal]
+    runs-on: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.8.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          cache: true
+
+      - name: Build and verify macOS package
         shell: bash
-        run: |
-          set -euo pipefail
-
-          version='1.13.14'
-          case "$(uname -m)" in
-            arm64) platform='arm64'; expected='73e8967b0fc08e17bce4263ca56ebc394822401a16497a1c4e02316c888202ab' ;;
-            x86_64) platform='amd64'; expected='5245d645e847f90bb708da74bc020ae078c28489690756419685c04f56b4e3bb' ;;
-            *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-
-          archive="sing-box-${version}-darwin-${platform}.tar.gz"
-          archive_path="$RUNNER_TEMP/$archive"
-          curl --fail --location --silent --show-error \
-            "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}" \
-            --output "$archive_path"
-          echo "$expected  $archive_path" | shasum --algorithm 256 --check --status
-
-          extract_dir="$RUNNER_TEMP/sing-box"
-          mkdir -p "$extract_dir"
-          tar -xzf "$archive_path" -C "$extract_dir"
-          sing_box_path="$(find "$extract_dir" -type f -name sing-box -perm -111 -print -quit)"
-          test -n "$sing_box_path"
-
-          app='trayapp/build/oneproxy-tray.app'
-          app_dir="$PWD/$app/Contents/MacOS"
-          resources_dir="$PWD/$app/Contents/Resources"
-          mkdir -p "$resources_dir/bin"
-          cp "$sing_box_path" "$app_dir/sing-box"
-          cp config-placeholder.json "$resources_dir/config-placeholder.json"
-          "$app_dir/sing-box" rule-set compile bin/geoip-cn.json -o "$resources_dir/bin/geoip-cn.srs"
-          "$app_dir/sing-box" rule-set compile bin/geosite-cn.json -o "$resources_dir/bin/geosite-cn.srs"
-
-          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$app" -always-overwrite
-          test -x "$app_dir/oneproxy-tray"
-          test -f "$app_dir/liboneproxy.dylib"
-          test -x "$app_dir/sing-box"
-          test -f "$resources_dir/config-placeholder.json"
-          test -f "$resources_dir/bin/geoip-cn.srs"
-          test -f "$resources_dir/bin/geosite-cn.srs"
-
-          # Deployment rewrites Mach-O load commands; sign the final contents
-          # from the inside out, including our dynamically loaded Go library.
-          if ! codesign --verify --deep --strict --verbose=2 "$PWD/$app"; then
-            echo 'Deployment output needs signing before distribution.'
-          fi
-          while IFS= read -r -d '' binary; do
-            # Signing the main executable also seals its enclosing bundle.
-            # Defer it until all nested code has been signed.
-            if [ "$binary" = "$app_dir/oneproxy-tray" ]; then continue; fi
-            if file -b "$binary" | grep -q 'Mach-O'; then
-              codesign --force --sign - --timestamp=none "$binary"
-            fi
-          done < <(find "$PWD/$app/Contents" -type f -print0)
-          while IFS= read -r -d '' bundle; do
-            codesign --force --sign - --timestamp=none "$bundle"
-          done < <(find "$PWD/$app/Contents" -depth -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) -print0)
-          codesign --force --sign - --timestamp=none "$PWD/$app"
-          codesign --verify --deep --strict --verbose=2 "$PWD/$app"
-
-          mkdir -p dist
-          ditto -c -k --keepParent "$PWD/$app" "dist/OneProxy-macos-${platform}.zip"
-
-          # Check the actual distributed archive after extraction, not just the
-          # build directory. This does not start a proxy or change system DNS.
-          verify_dir="$(mktemp -d "$RUNNER_TEMP/oneproxy-macos-verify.XXXXXX")"
-          ditto -x -k "dist/OneProxy-macos-${platform}.zip" "$verify_dir"
-          verified_app="$verify_dir/oneproxy-tray.app"
-          codesign --verify --deep --strict --verbose=2 "$verified_app"
-          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/liboneproxy.dylib"
-          codesign --verify --strict --verbose=2 "$verified_app/Contents/MacOS/sing-box"
-          "$verified_app/Contents/MacOS/sing-box" version
-          python3 - "$verified_app/Contents/MacOS/liboneproxy.dylib" <<'PY'
-          import ctypes
-          import sys
-          library = ctypes.CDLL(sys.argv[1])
-          library.OneProxy_GetVersion.restype = ctypes.c_void_p
-          library.OneProxy_FreeString.argtypes = [ctypes.c_void_p]
-          version = library.OneProxy_GetVersion()
-          assert version, 'OneProxy_GetVersion returned NULL'
-          try:
-              print('Packaged Go library version:', ctypes.string_at(version).decode())
-          finally:
-              library.OneProxy_FreeString(version)
-          PY
+        run: bash scripts/build-macos.sh --arch "${{ matrix.arch }}" --qt-root "$QT_ROOT_DIR"
 
       - name: Upload macOS app bundle
-        if: runner.os == 'macOS'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: OneProxy-macos-${{ runner.arch }}
+          name: OneProxy-macos-${{ matrix.arch }}
           if-no-files-found: error
-          path: dist/OneProxy-macos-*.zip
+          path: dist/OneProxy-macos-${{ matrix.arch }}.zip
 
   windows-installer:
     name: Windows installer
-    needs: platform-build
+    needs: [platform-build, macos-build]
     runs-on: windows-2022
     permissions:
       contents: write

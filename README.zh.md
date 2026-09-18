@@ -115,6 +115,18 @@ OneProxy 支持一个 HTTP(S) 订阅与任意数量的手工节点共存。程�
 
 托盘图标出现在系统托盘（右下角）。右键打开菜单。
 
+### macOS 编译和打包
+
+安装 Xcode 命令行工具、Go 1.26+、CMake 3.21+、Python 3 和 Qt 6.8.3 后，在源码目录执行：
+
+```bash
+bash scripts/build-macos.sh --arch x86_64 --qt-root "$HOME/Qt"   # Intel
+bash scripts/build-macos.sh --arch arm64 --qt-root "$HOME/Qt"    # M 系列
+bash scripts/build-macos.sh --arch universal --qt-root "$HOME/Qt" # 双架构
+```
+
+Qt 路径需包含 `bin/macdeployqt`，库需包含目标架构。脚本自动完成编译、测试、sing-box 和规则集打包、Qt 部署、临时签名与解压校验，生成 `dist/OneProxy-macos-<arch>.zip`。应用未经过 Apple 公证；交叉编译不能替代目标机器上的运行验收。详见[跨平台构建说明](docs/CROSS_PLATFORM.md#从源码编译和打包)。
+
 ### Ubuntu 24.04 CLI
 
 Ubuntu 当前支持从源码构建、仅以前台方式运行的 CLI；暂不提供安装包、systemd unit、daemon 模式、PID 文件或跨进程控制命令。

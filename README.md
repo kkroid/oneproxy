@@ -113,6 +113,18 @@ The script discovers MSVC and Qt through `vswhere.exe` and `qmake.exe`. Custom l
 
 The tray icon appears in the system tray (bottom-right). Right-click to open menu.
 
+### macOS build and packaging
+
+Install Xcode command line tools, Go 1.26+, CMake 3.21+, Python 3, and Qt 6.8.3, then run from the source directory:
+
+```bash
+bash scripts/build-macos.sh --arch x86_64 --qt-root "$HOME/Qt"   # Intel
+bash scripts/build-macos.sh --arch arm64 --qt-root "$HOME/Qt"    # Apple Silicon
+bash scripts/build-macos.sh --arch universal --qt-root "$HOME/Qt" # Both
+```
+
+The Qt root must contain `bin/macdeployqt` and libraries for the target architectures. The script builds, tests, bundles sing-box and rule sets, deploys Qt, applies ad-hoc signatures, and verifies the extracted ZIP. Output: `dist/OneProxy-macos-<arch>.zip`. Apps are not Apple-notarized; cross-compilation does not replace runtime testing on the target Mac. See the [cross-platform guide](docs/CROSS_PLATFORM.md).
+
 ### Ubuntu 24.04 CLI
 
 Ubuntu support is a source-built, foreground-only CLI. It does not currently include a package, systemd unit, daemon mode, PID file, or cross-process control commands.
