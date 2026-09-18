@@ -209,6 +209,34 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -Installer
 
+      - name: Verify installed C++ runtime
+        shell: pwsh
+        run: |
+          # Install only on the disposable CI runner. Silent mode skips app launch.
+          $installDir = Join-Path $env:RUNNER_TEMP 'OneProxy-install-check'
+          $setups = @(Get-ChildItem dist/OneProxy-*-setup.exe)
+          if ($setups.Count -ne 1) { throw 'Expected exactly one installer' }
+          $setup = $setups[0]
+          $process = Start-Process -FilePath $setup.FullName -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
+            ('/DIR="' + $installDir + '"')
+          ) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $runtimeFiles = Get-ChildItem trayapp/build/*.dll | Where-Object {
+            $_.Name -match '^(vcruntime140.*|msvcp140.*|concrt140|vccorlib140)\.dll$'
+          }
+          foreach ($required in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+            if ($required -notin $runtimeFiles.Name) { throw "Missing build runtime: $required" }
+          }
+          foreach ($runtime in $runtimeFiles) {
+            $installed = Join-Path $installDir $runtime.Name
+            if (-not (Test-Path -LiteralPath $installed)) { throw "Runtime missing from installer: $($runtime.Name)" }
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $runtime.FullName).Hash) {
+              throw "Installed runtime differs from build: $($runtime.Name)"
+            }
+            Write-Host "Verified installed runtime: $($runtime.Name)"
+          }
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

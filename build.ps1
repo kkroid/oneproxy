@@ -109,12 +109,18 @@ $buildLog = "$env:TEMP\oneproxy_build.log"
 Set-Content -Path $buildBat -Encoding ASCII @"
 @echo off
 call "$vcvars" >nul 2>&1
+if %ERRORLEVEL% neq 0 exit /b 1
 cd /d "$buildDir"
 cmake "$root\trayapp" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$qtDir" >> "$buildLog" 2>&1
 if %ERRORLEVEL% neq 0 exit /b 2
 nmake >> "$buildLog" 2>&1
 if %ERRORLEVEL% neq 0 exit /b 3
-"$qtDir\bin\windeployqt.exe" oneproxy-tray.exe --no-translations --no-system-d3d-compiler --no-opengl-sw >> "$buildLog" 2>&1
+"$qtDir\bin\windeployqt.exe" oneproxy-tray.exe --no-compiler-runtime --no-translations --no-system-d3d-compiler --no-opengl-sw >> "$buildLog" 2>&1
+if %ERRORLEVEL% neq 0 exit /b 4
+rem Deploy the x64 release CRT beside the app; users need no separate installer.
+if not exist "%VCToolsRedistDir%x64\Microsoft.VC143.CRT\vcruntime140_1.dll" exit /b 5
+copy /y "%VCToolsRedistDir%x64\Microsoft.VC143.CRT\*.dll" . >> "$buildLog" 2>&1
+if %ERRORLEVEL% neq 0 exit /b 6
 exit /b 0
 "@
 
@@ -151,7 +157,7 @@ if (Test-Path "$root\config-placeholder.json") { Copy-Item -Force "$root\config-
 
 # 4. Verify
 $missing = @()
-foreach ($f in @("oneproxy-tray.exe","oneproxy.dll","Qt6Gui.dll","Qt6Widgets.dll","platforms\qwindows.dll","bin\sing-box.exe","bin\geoip-cn.srs","bin\geosite-cn.srs")) {
+foreach ($f in @("oneproxy-tray.exe","oneproxy.dll","Qt6Core.dll","Qt6Gui.dll","Qt6Widgets.dll","vcruntime140.dll","vcruntime140_1.dll","msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll","msvcp140_atomic_wait.dll","msvcp140_codecvt_ids.dll","concrt140.dll","platforms\qwindows.dll","bin\sing-box.exe","bin\geoip-cn.srs","bin\geosite-cn.srs")) {
     if (-not (Test-Path "$buildDir\$f")) { $missing += $f }
 }
 if ($missing.Count -gt 0) {

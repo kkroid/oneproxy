@@ -33,6 +33,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "oneproxy-tray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "oneproxy.dll"; DestDir: "{app}"; Flags: ignoreversion
 
+; App-local MSVC release runtime from the compiler's x64 redistributable directory.
+; No system-wide runtime installation or network download is needed.
+Source: "vcruntime140*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "msvcp140*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "concrt140.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "vccorlib140.dll"; DestDir: "{app}"; Flags: ignoreversion
+
 ; Qt6 runtime DLLs (only the ones windeployqt deploys)
 Source: "Qt6Core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Qt6Gui.dll"; DestDir: "{app}"; Flags: ignoreversion
