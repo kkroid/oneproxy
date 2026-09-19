@@ -119,11 +119,7 @@ jobs:
         run: ctest --test-dir trayapp/build -C Release --output-on-failure
 
   macos-build:
-    name: macOS package (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86_64, arm64, universal]
+    name: macOS package (universal)
     runs-on: macos-15
 
     steps:
@@ -147,14 +143,14 @@ jobs:
 
       - name: Build and verify macOS package
         shell: bash
-        run: bash scripts/build-macos.sh --arch "${{ matrix.arch }}" --qt-root "$QT_ROOT_DIR"
+        run: bash scripts/build-macos.sh --arch universal --qt-root "$QT_ROOT_DIR"
 
       - name: Upload macOS app bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: OneProxy-macos-${{ matrix.arch }}
+          name: OneProxy-macos-universal
           if-no-files-found: error
-          path: dist/OneProxy-macos-${{ matrix.arch }}.zip
+          path: dist/OneProxy-macos-universal.zip
 
   windows-installer:
     name: Windows installer

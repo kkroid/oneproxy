@@ -48,7 +48,7 @@ Windows 发布任务只有在 Windows、macOS 和 Linux 三个平台的编译检
 
 ### 下载和首次打开
 
-CI 提供 `OneProxy-macos-x86_64`（Intel）、`OneProxy-macos-arm64`（M 系列）和 `OneProxy-macos-universal`（两种架构）产物。解压 GitHub artifact ZIP，再解压其中的应用 ZIP，将 `oneproxy-tray.app` 拖入“应用程序”。双击的是整个 `.app`，不是 `Contents/MacOS` 内部的可执行文件。
+CI 只提供 `OneProxy-macos-universal` 产物，同一个应用支持 Intel 和 M 系列 Mac。解压 GitHub artifact ZIP，再解压其中的应用 ZIP，将 `oneproxy-tray.app` 拖入“应用程序”。双击的是整个 `.app`，不是 `Contents/MacOS` 内部的可执行文件。
 
 此版本未公证，macOS 可能阻止首次打开。先尝试打开一次，再到“系统设置 → 隐私与安全性”选择“仍要打开”。如果提示“已损坏”，先检查包的完整性：
 
