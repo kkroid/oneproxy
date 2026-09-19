@@ -24,6 +24,8 @@ endif()
 
 add_executable(oneproxy-tray
     main.cpp
+    instance_guard.cpp
+    instance_guard.h
     platform/platform.h
     ${ONEPROXY_PLATFORM_SOURCE}
     resources/icons.qrc

@@ -16,10 +16,12 @@
 #include <QDesktopServices>
 #include <QLibrary>
 #include <QUrl>
+#include <QMessageBox>
 #include <thread>
 #include <functional>
 #include "i18n.h"
 #include "platform/platform.h"
+#include "instance_guard.h"
 
 // ─── DLL bindings ──────────────────────────────────
 typedef char* (*PFN_Start)(char*);
@@ -317,17 +319,37 @@ private:
         runAsync([raw]() { callFree(pSelect(const_cast<char*>(raw.constData()))); }, 500);
     }
 
-    void doStart()    { callFree(pStart((char*)"config.json")); tick(); }
-    void doStop()     { callFree(pStop()); tick(); }
+    void showError(const QString &operation, const QString &error) {
+        if (error.isEmpty()) return;
+        qWarning() << operation << "failed:" << error;
+        tray->showMessage("OneProxy", operation + ": " + error,
+                          QSystemTrayIcon::Critical, 6000);
+    }
+
+    void doStart()    { showError("Start failed", callFree(pStart((char*)"config.json"))); tick(); }
+    void doStop()     { showError("Stop failed", callFree(pStop())); tick(); }
     void doRestart()  {
-        callFree(pRestart());
+        auto error = callFree(pRestart());
+        if (!error.isEmpty()) {
+            showError("Restart failed", error);
+            tick();
+            return;
+        }
         QTimer::singleShot(3000, this, [this]() {
             runAsync([]() { callFree(pCheck()); }, 8000);
         });
     }
     void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
-    void doFlush()    { callFree(pFlush()); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
-    void doQuit()     { callFree(pStop()); tray->hide(); QApplication::quit(); }
+    void doFlush()    { showError("DNS flush failed", callFree(pFlush())); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
+    void doQuit()     {
+        auto error = callFree(pStop());
+        if (!error.isEmpty()) {
+            showError("Stop failed", error);
+            return;
+        }
+        tray->hide();
+        QApplication::quit();
+    }
 
     void doOpenConfig() {
         QString path = QDir::homePath() + "/.oneproxy/config.json";
@@ -402,6 +424,23 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
 
+    // Check before loading the core or scheduling auto-start. The lock path
+    // stays the same across installs and macOS AppTranslocation directories.
+    InstanceGuard instance(QDir::homePath() + "/.oneproxy");
+    QString instanceError = instance.acquire();
+    if (instanceError.isEmpty()) {
+        const auto oldProcesses = legacyTrayProcesses();
+        if (!oldProcesses.isEmpty()) {
+            instanceError = QStringLiteral("An older OneProxy is already running (PID %1). "
+                                           "Quit it from its tray icon before launching this copy.")
+                                .arg(oldProcesses.first());
+        }
+    }
+    if (!instanceError.isEmpty()) {
+        QMessageBox::warning(nullptr, QStringLiteral("OneProxy"), instanceError);
+        return 1;
+    }
+
     // Load icons and DLL BEFORE constructing the tray (ctor uses both)
     qDebug() << "loading icons...";
     icoGreen  = loadIcon("green.ico");  qDebug() << "  green ok";
@@ -411,6 +450,13 @@ int main(int argc, char *argv[]) {
     qDebug() << "DLL OK";
     auto *t = new OneProxyTray;
     Platform::initializeTrayRecovery(t->tray);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, t, [t]() {
+        auto error = callFree(pStop());
+        if (!error.isEmpty()) {
+            qWarning() << "Stop failed during quit:" << error;
+        }
+        t->tray->hide();
+    });
     return app.exec();
 }
 

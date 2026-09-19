@@ -19,7 +19,7 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
-const appVersion = "0.8.0"
+const appVersion = "0.8.1"
 
 var (
 	gManager       *proxy.Manager

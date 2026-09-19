@@ -1,6 +1,6 @@
 ; OneProxy Installer Script — Inno Setup 6
 #define AppName "OneProxy"
-#define AppVersion "0.8.0"
+#define AppVersion "0.8.1"
 #define AppPublisher "OneProxy Contributors"
 #define AppURL "https://github.com/kkroid/oneproxy"
 #define AppExeName "oneproxy-tray.exe"
@@ -9,7 +9,7 @@
 AppId={{7A3F8C9E-1D2B-4A56-B789-012345ABCDEF}
 AppName={#AppName}
 AppVersion={#AppVersion}
-VersionInfoVersion=0.8.0.0
+VersionInfoVersion=0.8.1.0
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
@@ -86,3 +86,16 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function FindWindowEx(Parent, ChildAfter: HWND; ClassName, WindowName: String): HWND;
+  external 'FindWindowExW@user32.dll stdcall';
+
+function InitializeSetup(): Boolean;
+begin
+  { Both legacy and current trays expose this message-only window. Do not
+    overwrite a running installation or start a second copy elsewhere. }
+  Result := FindWindowEx(HWND(-3), 0, 'OneProxyTrayWindow', '') = 0;
+  if not Result then
+    SuppressibleMsgBox('OneProxy is running. Exit OneProxy from its tray menu, then run Setup again. Your proxy connection will stop while upgrading.', mbError, MB_OK, IDOK);
+end;
