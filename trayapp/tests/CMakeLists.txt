@@ -14,3 +14,7 @@ add_executable(oneproxy-instance-test instance_test.cpp ../instance_guard.cpp)
 target_link_libraries(oneproxy-instance-test PRIVATE Qt6::Test)
 add_dependencies(oneproxy-instance-test oneproxy-instance-helper)
 add_test(NAME oneproxy-instance-test COMMAND oneproxy-instance-test)
+
+add_executable(oneproxy-subscription-test subscription_status_test.cpp)
+target_link_libraries(oneproxy-subscription-test PRIVATE Qt6::Test)
+add_test(NAME oneproxy-subscription-test COMMAND oneproxy-subscription-test)

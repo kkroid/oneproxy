@@ -23,6 +23,7 @@
 #include "i18n.h"
 #include "platform/platform.h"
 #include "instance_guard.h"
+#include "subscription_status.h"
 
 // ─── DLL bindings ──────────────────────────────────
 typedef char* (*PFN_Start)(char*);
@@ -140,6 +141,8 @@ public:
     }
 
 private:
+    SubscriptionStatus subscriptionStatus;
+
     void autoStart() {
         auto err = callFree(pStart((char*)"config.json"));
         if (!err.isEmpty()) {
@@ -161,6 +164,10 @@ private:
         auto json = callFree(pStatus());
         if (json.isEmpty()) return false;
         auto obj = QJsonDocument::fromJson(json.toUtf8()).object();
+        subscriptionStatus.update(obj);
+        if (subscriptionStatus.notifyFailure) {
+            tray->showMessage("OneProxy", subscriptionStatus.text, QSystemTrayIcon::Warning, 5000);
+        }
         running = obj["running"].toBool();
         unifiedPort = obj["unified_port"].toInt();
         selectionMode = obj["selection_mode"].toString();
@@ -193,6 +200,9 @@ private:
         else if (ok == total) { tray->setIcon(icoGreen);  tray->setToolTip(QString("OneProxy %1/%2 OK").arg(ok).arg(total)); }
         else if (ok > 0)      { tray->setIcon(icoYellow); tray->setToolTip(QString("OneProxy %1/%2").arg(ok).arg(total)); }
         else if (ok == 0)     { tray->setIcon(icoRed);    tray->setToolTip(QString("OneProxy %1/%2 all down").arg(ok).arg(total)); }
+        if (!subscriptionStatus.text.isEmpty()) {
+            tray->setToolTip(tray->toolTip() + "\n" + subscriptionStatus.text);
+        }
     }
 
     // Called only on QMenu::aboutToShow — rebuilds items right before display.
@@ -205,6 +215,9 @@ private:
 
         // Status — always at top
         menu->addAction(running ? s.running : s.stopped)->setEnabled(false);
+        if (!subscriptionStatus.text.isEmpty()) {
+            menu->addAction(subscriptionStatus.text)->setEnabled(false);
+        }
         menu->addSeparator();
 
         // Unified proxy: show the address and active node at the top
@@ -311,7 +324,8 @@ private:
         menu->addAction(s.importClipboard, this, &OneProxyTray::doImportClipboard);
         auto statusJson = QJsonDocument::fromJson(callFree(pStatus()).toUtf8()).object();
         auto *updateSubscription = menu->addAction(s.updateSubscription, this, &OneProxyTray::doUpdateSubscription);
-        updateSubscription->setEnabled(statusJson["subscription_configured"].toBool() &&
+        updateSubscription->setEnabled(statusJson["running"].toBool() &&
+                                       statusJson["subscription_configured"].toBool() &&
                                        !statusJson["subscription_updating"].toBool());
         menu->addSeparator();
         menu->addAction(s.quit, this, &OneProxyTray::doQuit);
@@ -398,18 +412,8 @@ private:
     }
 
     void doUpdateSubscription() {
-        runAsync([this]() {
-            auto err = callFree(pUpdateSubscription());
-            QMetaObject::invokeMethod(this, [this, err]() {
-                if (!err.isEmpty()) {
-                    tray->showMessage("OneProxy", "Subscription update failed: " + err,
-                                      QSystemTrayIcon::Critical, 5000);
-                } else {
-                    tray->showMessage("OneProxy", "Subscription is up to date",
-                                      QSystemTrayIcon::Information, 2000);
-                }
-            }, Qt::QueuedConnection);
-        }, 0);
+        // The shared status path suppresses stale-session and duplicate notices.
+        runAsync([]() { callFree(pUpdateSubscription()); }, 0);
     }
 
     static bool isAutoStart() {

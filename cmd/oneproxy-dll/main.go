@@ -78,6 +78,10 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 // startProxy requires gMu. Dispose the previous session before replacing globals.
 func startProxy(cp string) error {
+	return startProxyInDataDir(cp, resolveDataDir())
+}
+
+func startProxyInDataDir(cp, dataDir string) error {
 	if gManager != nil && gManager.IsRunning() {
 		return fmt.Errorf("already running")
 	}
@@ -96,7 +100,7 @@ func startProxy(cp string) error {
 	if err != nil {
 		// Fresh install or config deleted — copy the bundled placeholder.
 		placeholder := filepath.Join(resourceDir(exeDir()), "config-placeholder.json")
-		target := filepath.Join(resolveDataDir(), "config.json")
+		target := filepath.Join(dataDir, "config.json")
 		if src, e := os.ReadFile(placeholder); e == nil {
 			if e := os.WriteFile(target, src, 0644); e == nil {
 				found = target
@@ -118,8 +122,6 @@ func startProxy(cp string) error {
 	}
 
 	gConfig = cfg
-
-	dataDir := resolveDataDir()
 
 	// Init application logger (10 MB max, keep 3 rotated backups)
 	if gLogger == nil {
@@ -204,6 +206,7 @@ func watchManagerLifecycle(manager *proxy.Manager, checker *proxy.HealthChecker)
 		if checker != nil {
 			checker.Stop()
 		}
+		stopSubscriptionUpdater()
 		if gLogger != nil && err != nil {
 			gLogger.Error("sing-box lifecycle ended: %v", err)
 		}
@@ -272,6 +275,7 @@ type statusOut struct {
 	SubscriptionUpdating   bool          `json:"subscription_updating"`
 	SubscriptionLastAt     string        `json:"subscription_last_at,omitempty"`
 	SubscriptionLastError  string        `json:"subscription_last_error,omitempty"`
+	SubscriptionResultID   string        `json:"subscription_result_id,omitempty"`
 	Proxies                []statusProxy `json:"proxies"`
 }
 
@@ -292,6 +296,7 @@ func OneProxy_Status() *C.char {
 	manager := gManager
 	configSnapshot := gConfig
 	healthChecker := gHealthChecker
+	updating, lastAt, lastError, resultID := subscriptionStatus()
 	gMu.Unlock()
 
 	out := statusOut{}
@@ -301,10 +306,13 @@ func OneProxy_Status() *C.char {
 	if configSnapshot != nil {
 		out.UnifiedPort = configSnapshot.Unified.Port
 		out.SubscriptionConfigured = configSnapshot.SubscriptionURL != ""
-		var lastAt time.Time
-		out.SubscriptionUpdating, lastAt, out.SubscriptionLastError = subscriptionStatus()
-		if !lastAt.IsZero() {
-			out.SubscriptionLastAt = lastAt.Format(time.RFC3339)
+		if out.Running && out.SubscriptionConfigured {
+			out.SubscriptionUpdating = updating
+			out.SubscriptionLastError = lastError
+			out.SubscriptionResultID = resultID
+			if !lastAt.IsZero() {
+				out.SubscriptionLastAt = lastAt.Format(time.RFC3339)
+			}
 		}
 		if out.Running && out.UnifiedPort > 0 {
 			out.SelectionMode, out.SelectedProxy = selectorState(configSnapshot)

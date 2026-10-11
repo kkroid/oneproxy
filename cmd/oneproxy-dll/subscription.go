@@ -3,67 +3,64 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/kkroid/oneproxy/internal/config"
 )
 
-const (
-	subscriptionInitialDelay = 30 * time.Second
-	subscriptionInterval     = 6 * time.Hour
-)
+const subscriptionInterval = 6 * time.Hour
+
+type subscriptionSession struct {
+	stop chan struct{}
+	done chan struct{}
+}
 
 var (
-	subscriptionDataDir     = resolveDataDir
-	subscriptionRestart     = reloadAndRestart
-	subscriptionUpdateMu    sync.Mutex
-	subscriptionLifecycleMu sync.Mutex
-	subscriptionStop        chan struct{}
-	subscriptionStateMu     sync.RWMutex
-	subscriptionUpdating    bool
-	subscriptionLastAt      time.Time
-	subscriptionLastErr     string
+	subscriptionDataDir  = resolveDataDir
+	subscriptionRestart  = reloadAndRestart
+	subscriptionUpdateMu sync.Mutex
+	// Session and published status are protected by gMu, like Start and Stop.
+	subscriptionActive   *subscriptionSession
+	subscriptionUpdating bool
+	subscriptionLastAt   time.Time
+	subscriptionLastErr  string
+	subscriptionResultID uint64
 )
 
+// Requires gMu; only called after the proxy has started successfully.
 func startSubscriptionUpdater() {
-	subscriptionLifecycleMu.Lock()
-	if subscriptionStop != nil {
-		close(subscriptionStop)
+	if subscriptionActive != nil {
+		return
 	}
-	stop := make(chan struct{})
-	subscriptionStop = stop
-	subscriptionLifecycleMu.Unlock()
+	session := &subscriptionSession{stop: make(chan struct{}), done: make(chan struct{})}
+	subscriptionActive = session
 	go func() {
-		timer := time.NewTimer(subscriptionInitialDelay)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			_ = updateConfiguredSubscriptionForSession(stop)
-		case <-stop:
-			return
-		}
-
+		defer close(session.done)
+		_ = updateConfiguredSubscriptionForSession(session.stop)
 		ticker := time.NewTicker(subscriptionInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				_ = updateConfiguredSubscriptionForSession(stop)
-			case <-stop:
+				_ = updateConfiguredSubscriptionForSession(session.stop)
+			case <-session.stop:
 				return
 			}
 		}
 	}()
 }
 
+// Requires gMu. It never waits for a request or takes subscriptionUpdateMu.
 func stopSubscriptionUpdater() {
-	subscriptionLifecycleMu.Lock()
-	defer subscriptionLifecycleMu.Unlock()
-	if subscriptionStop != nil {
-		close(subscriptionStop)
-		subscriptionStop = nil
+	if subscriptionActive != nil {
+		close(subscriptionActive.stop)
+		subscriptionActive = nil
 	}
+	subscriptionUpdating = false
+	subscriptionLastAt = time.Time{}
+	subscriptionLastErr = ""
 }
 
 func updateConfiguredSubscription() error {
@@ -72,71 +69,62 @@ func updateConfiguredSubscription() error {
 
 func updateConfiguredSubscriptionForSession(stop <-chan struct{}) error {
 	gMu.Lock()
-	select {
-	case <-stop:
-		gMu.Unlock()
-		return fmt.Errorf("subscription session stopped")
-	default:
-	}
-	if gConfig == nil || gConfig.SubscriptionURL == "" {
-		gMu.Unlock()
-		return fmt.Errorf("subscription URL not configured")
-	}
-	url := gConfig.SubscriptionURL
-	gMu.Unlock()
-	return updateSubscriptionForSession(url, false, stop)
-}
-
-func updateSubscription(url string, allowSourceChange bool) error {
-	return updateSubscriptionForSession(url, allowSourceChange, nil)
-}
-
-func updateSubscriptionForSession(url string, allowSourceChange bool, stop <-chan struct{}) error {
-	subscriptionUpdateMu.Lock()
-	defer subscriptionUpdateMu.Unlock()
-	gMu.Lock()
-	select {
-	case <-stop:
-		gMu.Unlock()
-		return fmt.Errorf("subscription session stopped")
-	default:
-	}
-	sessionConfig := gConfig
-	gMu.Unlock()
-	setSubscriptionUpdateState(true, "")
-	defer setSubscriptionUpdating(false)
-
-	incoming, _, err := config.FetchSubscription(url, 0)
-	if err != nil {
-		setSubscriptionUpdateError(err)
-		return err
-	}
-
-	gMu.Lock()
 	defer gMu.Unlock()
 	select {
 	case <-stop:
 		return fmt.Errorf("subscription session stopped")
 	default:
 	}
-	if gConfig != sessionConfig {
+	if gConfig == nil || gConfig.SubscriptionURL == "" {
+		return fmt.Errorf("subscription URL not configured")
+	}
+	return updateSubscriptionLocked(gConfig.SubscriptionURL, false)
+}
+
+func updateSubscription(url string, allowSourceChange bool) error {
+	gMu.Lock()
+	defer gMu.Unlock()
+	return updateSubscriptionLocked(url, allowSourceChange)
+}
+
+// Called with gMu held; drops it for queuing and download, returns with it held.
+// Capture identity BEFORE queuing so an old caller cannot adopt a new session.
+func updateSubscriptionLocked(url string, allowSourceChange bool) error {
+	current, session := gConfig, subscriptionActive
+	if current == nil {
+		return fmt.Errorf("not started")
+	}
+	var stop <-chan struct{}
+	if session != nil {
+		stop = session.stop
+	}
+	gMu.Unlock()
+	subscriptionUpdateMu.Lock()
+	defer subscriptionUpdateMu.Unlock()
+	gMu.Lock()
+	if gConfig != current || subscriptionActive != session {
 		return fmt.Errorf("subscription session changed while updating")
 	}
-	if gConfig == nil {
-		err := fmt.Errorf("not started")
-		setSubscriptionUpdateError(err)
-		return err
+	if !allowSourceChange && current.SubscriptionURL != url {
+		return fmt.Errorf("configured subscription changed while updating")
 	}
-	if !allowSourceChange && gConfig.SubscriptionURL != url {
-		err := fmt.Errorf("configured subscription changed while updating")
-		setSubscriptionUpdateError(err)
-		return err
+	subscriptionUpdating = true
+	subscriptionLastErr = ""
+	gMu.Unlock()
+	incoming, err := fetchSubscriptionForSession(url, stop)
+	gMu.Lock()
+	if subscriptionActive == session {
+		subscriptionUpdating = false
 	}
-	current := gConfig
+	if gConfig != current || subscriptionActive != session {
+		return fmt.Errorf("subscription session changed while updating")
+	}
+	if err != nil {
+		return setSubscriptionUpdateError()
+	}
 	next, result, err := config.MergeSubscription(current, incoming, url)
 	if err != nil {
-		setSubscriptionUpdateError(err)
-		return err
+		return setSubscriptionUpdateError()
 	}
 	if !result.Changed {
 		setSubscriptionUpdateSuccess()
@@ -145,40 +133,82 @@ func updateSubscriptionForSession(url string, allowSourceChange bool, stop <-cha
 
 	selectionMode, selectedProxy := selectorState(current)
 	configPath := filepath.Join(subscriptionDataDir(), "config.json")
-	if err := next.Save(configPath); err != nil {
-		setSubscriptionUpdateError(err)
-		return err
-	}
-	gConfig = next
 	if !result.RuntimeChanged {
+		if err := next.Save(configPath); err != nil {
+			return setSubscriptionUpdateError()
+		}
+		gConfig = next
 		setSubscriptionUpdateSuccess()
 		return nil
 	}
+	gConfig = next
 	if err := subscriptionRestart(); err != nil {
 		gConfig = current
-		_ = current.Save(configPath)
 		_ = subscriptionRestart()
-		setSubscriptionUpdateError(err)
-		return err
+		restoreSubscriptionSelection(current, selectionMode, selectedProxy)
+		return setSubscriptionUpdateError()
 	}
-	if selectionMode == "manual" && proxyEnabledByName(next, selectedProxy) {
-		selectorTag := next.Unified.Tag
-		if selectorTag == "" {
-			selectorTag = "proxy"
-		}
-		outboundTag, err := selectionOutboundTag(selectedProxy, next.Proxies)
-		if err == nil {
-			if err := restoreSelectorSelection(selectorTag, outboundTag); err != nil && gLogger != nil {
-				gLogger.Warn("could not restore manual proxy selection: %v", err)
-			}
-		}
+	// Persist only after runtime application succeeds; a restart failure must not
+	// rewrite even the formatting of the original config file.
+	if err := next.Save(configPath); err != nil {
+		gConfig = current
+		_ = subscriptionRestart()
+		restoreSubscriptionSelection(current, selectionMode, selectedProxy)
+		return setSubscriptionUpdateError()
 	}
+	restoreSubscriptionSelection(next, selectionMode, selectedProxy)
 	if gLogger != nil {
 		gLogger.Info("subscription updated: added=%d updated=%d missing=%d removed=%d",
 			result.Added, result.Updated, result.Missing, result.Removed)
 	}
 	setSubscriptionUpdateSuccess()
 	return nil
+}
+
+// FetchSubscription owns a 15s HTTP timeout and the shared feed parser. Stop
+// releases the update queue immediately; a late download only owns this buffered
+// result channel and cannot access configuration, state, or a replacement session.
+func fetchSubscriptionForSession(url string, stop <-chan struct{}) ([]config.ProxyConfig, error) {
+	if stop == nil {
+		proxies, _, err := config.FetchSubscription(url, 0)
+		return proxies, err
+	}
+	select {
+	case <-stop:
+		return nil, fmt.Errorf("subscription session stopped")
+	default:
+	}
+	type response struct {
+		proxies []config.ProxyConfig
+		err     error
+	}
+	result := make(chan response, 1)
+	go func() {
+		proxies, _, err := config.FetchSubscription(url, 0)
+		result <- response{proxies, err}
+	}()
+	select {
+	case <-stop:
+		return nil, fmt.Errorf("subscription session stopped")
+	case received := <-result:
+		return received.proxies, received.err
+	}
+}
+
+func restoreSubscriptionSelection(cfg *config.Config, mode, name string) {
+	if mode != "manual" || !proxyEnabledByName(cfg, name) {
+		return
+	}
+	selectorTag := cfg.Unified.Tag
+	if selectorTag == "" {
+		selectorTag = "proxy"
+	}
+	outboundTag, err := selectionOutboundTag(name, cfg.Proxies)
+	if err == nil {
+		if err := restoreSelectorSelection(selectorTag, outboundTag); err != nil && gLogger != nil {
+			gLogger.Warn("could not restore manual proxy selection: %v", err)
+		}
+	}
 }
 
 func restoreSelectorSelection(selectorTag, outboundTag string) error {
@@ -202,37 +232,27 @@ func proxyEnabledByName(cfg *config.Config, name string) bool {
 	return false
 }
 
-func setSubscriptionUpdateState(updating bool, lastError string) {
-	subscriptionStateMu.Lock()
-	defer subscriptionStateMu.Unlock()
-	subscriptionUpdating = updating
-	subscriptionLastErr = lastError
-}
-
-func setSubscriptionUpdating(updating bool) {
-	subscriptionStateMu.Lock()
-	subscriptionUpdating = updating
-	subscriptionStateMu.Unlock()
-}
-
-func setSubscriptionUpdateError(err error) {
-	subscriptionStateMu.Lock()
-	subscriptionLastErr = err.Error()
-	subscriptionStateMu.Unlock()
+// Requires gMu. Do not expose feed contents, URLs, or parser errors in status.
+func setSubscriptionUpdateError() error {
+	subscriptionLastErr = "Subscription update failed. Please check the subscription and try again."
+	subscriptionResultID++
 	if gLogger != nil {
-		gLogger.Warn("subscription update failed: %v", err)
+		gLogger.Warn("subscription update failed")
 	}
+	return fmt.Errorf("%s", subscriptionLastErr)
 }
 
 func setSubscriptionUpdateSuccess() {
-	subscriptionStateMu.Lock()
 	subscriptionLastAt = time.Now()
 	subscriptionLastErr = ""
-	subscriptionStateMu.Unlock()
+	subscriptionResultID++
 }
 
-func subscriptionStatus() (bool, time.Time, string) {
-	subscriptionStateMu.RLock()
-	defer subscriptionStateMu.RUnlock()
-	return subscriptionUpdating, subscriptionLastAt, subscriptionLastErr
+// Requires gMu so subscription status and the proxy session form one snapshot.
+func subscriptionStatus() (bool, time.Time, string, string) {
+	resultID := ""
+	if subscriptionLastErr != "" || !subscriptionLastAt.IsZero() {
+		resultID = strconv.FormatUint(subscriptionResultID, 10)
+	}
+	return subscriptionUpdating, subscriptionLastAt, subscriptionLastErr, resultID
 }
