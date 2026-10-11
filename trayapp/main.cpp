@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QImageReader>
 #include <QDir>
 #include <QClipboard>
 #include <QDebug>
@@ -96,6 +97,20 @@ static QIcon loadIcon(const QString &name) {
              : name.startsWith("yellow") ? QColor(0xE0,0xA0,0x00) : QColor(0xC0,0x39,0x2B);
     pr.setBrush(c); pr.setPen(Qt::NoPen); pr.drawEllipse(4,4,56,56); pr.end();
     return QIcon(px);
+}
+
+static bool requiredResourcesAvailable() {
+    for (const QString &name : {QStringLiteral("green.ico"), QStringLiteral("yellow.ico"), QStringLiteral("red.ico")}) {
+        const QString external = QDir(QCoreApplication::applicationDirPath()).filePath(name);
+        const QString resource = QStringLiteral(":/icons/") + name;
+        const QString path = QFile::exists(external) ? external : resource;
+        QImageReader reader(path);
+        if (!reader.canRead()) {
+            qCritical() << "Required icon cannot be read:" << path << reader.errorString();
+            return false;
+        }
+    }
+    return true;
 }
 
 // ─── Tray ───────────────────────────────────────────
@@ -423,12 +438,16 @@ private:
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    app.setOrganizationName(QStringLiteral("OneProxy"));
+    app.setApplicationName(QStringLiteral("OneProxyTray"));
+    const bool selfCheck = app.arguments().contains(QStringLiteral("--self-check"));
 
     // Check before loading the core or scheduling auto-start. The lock path
     // stays the same across installs and macOS AppTranslocation directories.
     InstanceGuard instance(QDir::homePath() + "/.oneproxy");
-    QString instanceError = instance.acquire();
-    if (instanceError.isEmpty()) {
+    QString instanceError;
+    if (!selfCheck) instanceError = instance.acquire();
+    if (!selfCheck && instanceError.isEmpty()) {
         const auto oldProcesses = legacyTrayProcesses();
         if (!oldProcesses.isEmpty()) {
             instanceError = QStringLiteral("An older OneProxy is already running (PID %1). "
@@ -448,6 +467,11 @@ int main(int argc, char *argv[]) {
     icoRed    = loadIcon("red.ico");    qDebug() << "  red ok";
     if (!loadDLL()) { qCritical() << "DLL failed"; return 1; }
     qDebug() << "DLL OK";
+    if (selfCheck) {
+        if (!requiredResourcesAvailable()) return 1;
+        qInfo() << "OneProxy self-check passed";
+        return 0;
+    }
     auto *t = new OneProxyTray;
     Platform::initializeTrayRecovery(t->tray);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, t, [t]() {

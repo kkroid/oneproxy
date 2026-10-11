@@ -15,6 +15,8 @@ const (
 )
 
 var (
+	subscriptionDataDir     = resolveDataDir
+	subscriptionRestart     = reloadAndRestart
 	subscriptionUpdateMu    sync.Mutex
 	subscriptionLifecycleMu sync.Mutex
 	subscriptionStop        chan struct{}
@@ -37,7 +39,7 @@ func startSubscriptionUpdater() {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			_ = updateConfiguredSubscription()
+			_ = updateConfiguredSubscriptionForSession(stop)
 		case <-stop:
 			return
 		}
@@ -47,7 +49,7 @@ func startSubscriptionUpdater() {
 		for {
 			select {
 			case <-ticker.C:
-				_ = updateConfiguredSubscription()
+				_ = updateConfiguredSubscriptionForSession(stop)
 			case <-stop:
 				return
 			}
@@ -65,19 +67,42 @@ func stopSubscriptionUpdater() {
 }
 
 func updateConfiguredSubscription() error {
+	return updateConfiguredSubscriptionForSession(nil)
+}
+
+func updateConfiguredSubscriptionForSession(stop <-chan struct{}) error {
 	gMu.Lock()
+	select {
+	case <-stop:
+		gMu.Unlock()
+		return fmt.Errorf("subscription session stopped")
+	default:
+	}
 	if gConfig == nil || gConfig.SubscriptionURL == "" {
 		gMu.Unlock()
 		return fmt.Errorf("subscription URL not configured")
 	}
 	url := gConfig.SubscriptionURL
 	gMu.Unlock()
-	return updateSubscription(url, false)
+	return updateSubscriptionForSession(url, false, stop)
 }
 
 func updateSubscription(url string, allowSourceChange bool) error {
+	return updateSubscriptionForSession(url, allowSourceChange, nil)
+}
+
+func updateSubscriptionForSession(url string, allowSourceChange bool, stop <-chan struct{}) error {
 	subscriptionUpdateMu.Lock()
 	defer subscriptionUpdateMu.Unlock()
+	gMu.Lock()
+	select {
+	case <-stop:
+		gMu.Unlock()
+		return fmt.Errorf("subscription session stopped")
+	default:
+	}
+	sessionConfig := gConfig
+	gMu.Unlock()
 	setSubscriptionUpdateState(true, "")
 	defer setSubscriptionUpdating(false)
 
@@ -89,6 +114,14 @@ func updateSubscription(url string, allowSourceChange bool) error {
 
 	gMu.Lock()
 	defer gMu.Unlock()
+	select {
+	case <-stop:
+		return fmt.Errorf("subscription session stopped")
+	default:
+	}
+	if gConfig != sessionConfig {
+		return fmt.Errorf("subscription session changed while updating")
+	}
 	if gConfig == nil {
 		err := fmt.Errorf("not started")
 		setSubscriptionUpdateError(err)
@@ -111,7 +144,7 @@ func updateSubscription(url string, allowSourceChange bool) error {
 	}
 
 	selectionMode, selectedProxy := selectorState(current)
-	configPath := filepath.Join(resolveDataDir(), "config.json")
+	configPath := filepath.Join(subscriptionDataDir(), "config.json")
 	if err := next.Save(configPath); err != nil {
 		setSubscriptionUpdateError(err)
 		return err
@@ -121,10 +154,10 @@ func updateSubscription(url string, allowSourceChange bool) error {
 		setSubscriptionUpdateSuccess()
 		return nil
 	}
-	if err := reloadAndRestart(); err != nil {
+	if err := subscriptionRestart(); err != nil {
 		gConfig = current
 		_ = current.Save(configPath)
-		_ = reloadAndRestart()
+		_ = subscriptionRestart()
 		setSubscriptionUpdateError(err)
 		return err
 	}

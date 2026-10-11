@@ -1,6 +1,8 @@
 #include "platform.h"
+#include "autostart_settings.h"
 
 #include <QCoreApplication>
+#include <QMessageBox>
 #include <QSettings>
 #include <QSystemTrayIcon>
 #include <qt_windows.h>
@@ -43,18 +45,23 @@ bool autoStartSupported()
 bool autoStartEnabled()
 {
     const QSettings settings(autoStartRegistryPath, QSettings::NativeFormat);
-    return !settings.value(autoStartValueName).toString().isEmpty();
+    return AutoStart::belongsTo(settings.value(autoStartValueName).toString(),
+                                QCoreApplication::applicationFilePath());
 }
 
 bool setAutoStart(bool enabled)
 {
     QSettings settings(autoStartRegistryPath, QSettings::NativeFormat);
-    if (enabled) {
-        settings.setValue(autoStartValueName, QCoreApplication::applicationFilePath());
-    } else {
-        settings.remove(autoStartValueName);
+    const bool success = AutoStart::setEnabled(
+        settings, QCoreApplication::applicationFilePath(), enabled);
+    if (!success) {
+        QMessageBox::warning(nullptr, QStringLiteral("OneProxy"),
+            QCoreApplication::translate("Platform",
+                "Could not change start at login. Windows denied access, or the "
+                "startup entry belongs to another installation. Reopen the tray "
+                "menu to see the current setting."));
     }
-    return settings.status() == QSettings::NoError;
+    return success;
 }
 
 bool routingModeSupported()

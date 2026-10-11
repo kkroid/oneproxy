@@ -407,3 +407,7 @@ A: 编辑 `config.json`，在 `proxies` 数组中添加新条目，指定唯一�
 
 **Q: 这比 VPN 快吗？**  
 A: SOCKS5 代理开销低于 VPN（无 TUN/TAP 层），但速度取决于上游服务器质量。
+
+### Windows 发布签名
+
+运行 `pwsh -NoProfile -File .\scripts\sign-windows.ps1 -VerifyOnly` 可检查 Authenticode 状态并生成 SHA256 清单。有获批证书后使用 `-Sign -CertificateThumbprint ...` 或 `-PfxPath ...` 及可信 RFC 3161 `-TimestampUrl`。脚本覆盖托盘 EXE、核心 DLL、安装包和可选卸载程序；第三方 `bin\sing-box.exe` 明确排除。详见 `docs/windows-signing.md`；没有凭据时只能报告未验证。

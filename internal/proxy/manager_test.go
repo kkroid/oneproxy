@@ -5,13 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/kkroid/oneproxy/internal/config"
 	"testing"
 	"time"
+
+	"github.com/kkroid/oneproxy/internal/supervisor"
 )
 
 const helperProcessEnv = "ONEPROXY_MANAGER_HELPER"
 
 func TestMain(m *testing.M) {
+	if code, handled := supervisor.Main(); handled {
+		os.Exit(code)
+	}
 	if os.Getenv(helperProcessEnv) == "1" {
 		runManagerHelper()
 		os.Exit(0)
@@ -33,6 +41,7 @@ func runManagerHelper() {
 	}
 	switch os.Getenv("ONEPROXY_MANAGER_MODE") {
 	case "exit":
+		_, _ = fmt.Fprintln(os.Stderr, "listen tcp 127.0.0.1:12345: bind: address already in use")
 		os.Exit(23)
 	case "delay-exit":
 		time.Sleep(100 * time.Millisecond)
@@ -108,7 +117,8 @@ func TestForegroundManagerStopWaitsForReap(t *testing.T) {
 }
 
 func TestDefaultManagerRetainsAutomaticRestart(t *testing.T) {
-	manager, callsPath := newTestManager(t, true, "exit")
+	manager, callsPath := newTestManager(t, true, "delay-exit")
+	manager.startupWindow = 20 * time.Millisecond
 	manager.restartDelay = 10 * time.Millisecond
 
 	if err := manager.Start(); err != nil {
@@ -150,6 +160,7 @@ func TestManagerCheckReturnsChildOutput(t *testing.T) {
 func newTestManager(t *testing.T, autoRestart bool, mode string) (*Manager, string) {
 	t.Helper()
 	t.Setenv(helperProcessEnv, "1")
+	t.Setenv("GORACE", "atexit_sleep_ms=0")
 	t.Setenv("ONEPROXY_MANAGER_MODE", mode)
 	tempDir := t.TempDir()
 	callsPath := filepath.Join(tempDir, "calls.log")
@@ -180,5 +191,141 @@ func assertCallCount(t *testing.T, path, prefix string, want int) {
 	}
 	if count != want {
 		t.Fatalf("%s call count = %d, want %d; calls=%q", prefix, count, want, data)
+	}
+}
+
+func TestDLLManagerRejectsEarlyExitWithDiagnostic(t *testing.T) {
+	manager, calls := newTestManager(t, true, "exit")
+	manager = NewManagerWithLog(manager.singboxPath, manager.configPath, manager.logPath)
+	if err := os.WriteFile(manager.logPath, []byte("old unrelated failure\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := manager.Start()
+	if err == nil || !strings.Contains(err.Error(), "address already in use") || !strings.Contains(err.Error(), "23") {
+		t.Fatalf("Start() = %v, want child exit code and diagnostic", err)
+	}
+	if strings.Contains(err.Error(), "old unrelated failure") {
+		t.Fatalf("stale diagnostic: %v", err)
+	}
+	if manager.IsRunning() || manager.GetPID() != 0 {
+		t.Fatal("failed startup still running")
+	}
+	assertCallCount(t, calls, "run", 1)
+}
+
+func TestDLLManagerObservesStartupAndRejectsDuplicateStart(t *testing.T) {
+	manager, calls := newTestManager(t, true, "sleep")
+	manager = NewManagerWithLog(manager.singboxPath, manager.configPath, manager.logPath)
+	t.Cleanup(func() { _ = manager.Stop() })
+	start := time.Now()
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < defaultStartupWindow {
+		t.Fatal("startup observation skipped")
+	}
+	if err := manager.Start(); err == nil {
+		t.Fatal("duplicate Start succeeded")
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Restart(); err == nil {
+		t.Fatal("stale restart resurrected stopped manager")
+	}
+	assertCallCount(t, calls, "run", 1)
+}
+
+func TestManagerStopCancelsPendingAutomaticRestart(t *testing.T) {
+	manager, calls := newTestManager(t, true, "delay-exit")
+	manager.startupWindow = 20 * time.Millisecond
+	manager.restartDelay = time.Hour
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Observe the actual process exit before stopping during restart backoff.
+	deadline := time.Now().Add(3 * time.Second)
+	for manager.IsRunning() {
+		if time.Now().After(deadline) {
+			t.Fatal("helper did not exit")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if manager.IsRunning() {
+		t.Fatal("still running after stop")
+	}
+	assertCallCount(t, calls, "run", 1)
+}
+
+func TestManagerConcurrentRestartAndStopDoNotResurrect(t *testing.T) {
+	manager, calls := newTestManager(t, true, "sleep")
+	manager.startupWindow = 20 * time.Millisecond
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForHelperCall(t, calls)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = manager.Restart() }()
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	if manager.IsRunning() {
+		t.Fatal("restart resurrected manager after Stop")
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := string(data)
+	if err := manager.Restart(); err == nil {
+		t.Fatal("restart after Stop succeeded")
+	}
+	data, err = os.ReadFile(calls)
+	if err != nil || string(data) != before {
+		t.Fatal("stale recovery spawned a process")
+	}
+}
+
+func TestDLLStopOrderStopsHealthChecker(t *testing.T) {
+	manager, calls := newTestManager(t, true, "sleep")
+	manager.startupWindow = 20 * time.Millisecond
+	cfg := &config.Config{}
+	cfg.HealthCheck.Enabled = true
+	hc := NewHealthChecker(cfg, manager)
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForHelperCall(t, calls)
+	hc.Start()
+	// Match OneProxy_Stop: stop health checks before stopping the child.
+	hc.Stop()
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if hc.IsRunning() || manager.IsRunning() {
+		t.Fatal("Stop left lifecycle active")
+	}
+	assertCallCount(t, calls, "run", 1)
+}
+
+func waitForHelperCall(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), "run ") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper did not record run")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

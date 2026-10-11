@@ -159,7 +159,8 @@ cmake -S trayapp -B "$build_root" \
   -DCMAKE_OSX_ARCHITECTURES="$cmake_architectures" \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING="$build_testing" \
-  -DONEPROXY_LIBRARY_PATH="$output_dir/liboneproxy.dylib"
+  -DONEPROXY_LIBRARY_PATH="$output_dir/liboneproxy.dylib" \
+  -DONEPROXY_CLI_PATH="$output_dir/oneproxy"
 cmake --build "$build_root" --parallel 2
 
 if [[ "$build_testing" == ON ]]; then
@@ -172,6 +173,9 @@ app="$build_root/oneproxy-tray.app"
 app_dir="$app/Contents/MacOS"
 resources_dir="$app/Contents/Resources"
 mkdir -p "$resources_dir/bin"
+cp "$output_dir/oneproxy" "$app_dir/oneproxy"
+cp "$output_dir/liboneproxy.dylib" "$app_dir/liboneproxy.dylib"
+test -f "$app_dir/liboneproxy.dylib"
 
 download_singbox() {
   local singbox_arch="$1"
@@ -186,7 +190,7 @@ download_singbox() {
   extract_dir="$tmp/${singbox_arch}"
   downloaded_singbox="$extract_dir/sing-box-1.13.14-darwin-${singbox_arch}/sing-box"
   [[ ! -x "$downloaded_singbox" ]] || return 0
-  curl --retry 3 --fail --location --silent --show-error \
+  curl --http1.1 --retry 3 --fail --location --silent --show-error \
     "https://github.com/SagerNet/sing-box/releases/download/v1.13.14/$archive" \
     -o "$archive_path"
   echo "$expected  $archive_path" | shasum -a 256 -c - >/dev/null
@@ -241,6 +245,8 @@ ditto -c -k --keepParent "$app" "$root/dist/OneProxy-macos-$arch.zip"
 ditto -x -k "$root/dist/OneProxy-macos-$arch.zip" "$tmp/verify"
 verified_app="$tmp/verify/oneproxy-tray.app"
 codesign --verify --deep --strict --verbose=2 "$verified_app"
+test -f "$verified_app/Contents/MacOS/liboneproxy.dylib"
+test -x "$verified_app/Contents/MacOS/oneproxy"
 if [[ "$arch" == universal || "$arch" == "$host_arch" ]]; then
   "$verified_app/Contents/MacOS/sing-box" version
   python3 - "$verified_app/Contents/MacOS/liboneproxy.dylib" <<'PY'
@@ -256,6 +262,8 @@ try:
 finally:
     library.OneProxy_FreeString(version)
 PY
+  env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH -u QT_PLUGIN_PATH \
+    QT_QPA_PLATFORM=offscreen "$verified_app/Contents/MacOS/oneproxy-tray" --self-check
 else
   echo "Cross-compiled package verified; runtime checks require a $arch Mac."
 fi

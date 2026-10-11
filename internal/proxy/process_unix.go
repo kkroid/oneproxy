@@ -5,13 +5,19 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/kkroid/oneproxy/internal/supervisor"
 )
 
 type platformProcess struct {
 	stopTimeout time.Duration
+	mu          sync.Mutex
+	owner       *os.File
 }
 
 func configureProcessCommand(cmd *exec.Cmd) {
@@ -19,16 +25,20 @@ func configureProcessCommand(cmd *exec.Cmd) {
 }
 
 func (p *platformProcess) start(cmd *exec.Cmd) error {
-	return cmd.Start()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	owner, err := supervisor.Wrap(cmd)
+	if err == nil {
+		p.owner = owner
+	}
+	return err
 }
 
 func (p *platformProcess) stop(cmd *exec.Cmd, done <-chan struct{}) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if err := signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		return err
-	}
+	p.close()
 	timeout := p.stopTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -36,16 +46,17 @@ func (p *platformProcess) stop(cmd *exec.Cmd, done <-chan struct{}) error {
 	if waitForLifecycle(done, timeout) {
 		return nil
 	}
-	if err := signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		return err
-	}
-	if !waitForLifecycle(done, timeout) {
-		return fmt.Errorf("sing-box did not exit after SIGKILL")
-	}
-	return nil
+	return fmt.Errorf("sing-box supervisor did not finish cleanup")
 }
 
-func (p *platformProcess) close() {}
+func (p *platformProcess) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.owner != nil {
+		_ = p.owner.Close()
+		p.owner = nil
+	}
+}
 
 func signalProcessGroup(pid int, signal syscall.Signal) error {
 	err := syscall.Kill(-pid, signal)

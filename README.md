@@ -411,3 +411,7 @@ A: Edit `config.json`, add a new entry to `proxies` array with a unique `local_p
 
 **Q: Is this faster than using a VPN?**  
 A: SOCKS5 proxies have lower overhead than VPNs (no TUN/TAP layer), but speed depends on your upstream server quality.
+
+### Windows release signing
+
+Run `pwsh -NoProfile -File .\scripts\sign-windows.ps1 -VerifyOnly` to inspect Authenticode status and write a SHA256 manifest. With an approved certificate, pass `-Sign -CertificateThumbprint ...` or `-PfxPath ...` and a trusted RFC 3161 `-TimestampUrl`. The script covers the OneProxy tray EXE, core DLL, installer, and optional uninstaller. Third-party `bin\sing-box.exe` remains excluded; see `docs/windows-signing.md`. Missing credentials means artifacts remain explicitly unverified.

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/proxy"
 	"github.com/kkroid/oneproxy/internal/config"
 	"github.com/kkroid/oneproxy/internal/logger"
+	"golang.org/x/net/proxy"
 )
 
 // HealthResult represents the health check result for a single proxy
@@ -35,6 +35,7 @@ type HealthChecker struct {
 	isRunning    bool
 	stopped      bool           // true once Stop() has closed stopChan
 	wg           sync.WaitGroup // tracks in-flight CheckAll rounds
+	checkMux     sync.Mutex     // serializes manual and scheduled rounds, including recovery
 	allDownCount int            // consecutive all-down rounds
 	onAllDown    func()         // callback when ALL nodes are down
 	appLog       *logger.Logger
@@ -79,6 +80,8 @@ func (hc *HealthChecker) Start() {
 		defer hc.wg.Done()
 		hc.CheckAll() // first check immediately
 		for {
+			// CheckAll skips unready cores. Keep the scheduler alive during
+			// Manager's automatic restart backoff; terminal exit calls Stop.
 			interval := hc.nextInterval()
 			timer := time.NewTimer(interval)
 			select {
@@ -96,13 +99,11 @@ func (hc *HealthChecker) Start() {
 // round to finish. This prevents stale checks from racing with Restart.
 func (hc *HealthChecker) Stop() {
 	hc.stateMux.Lock()
-	if !hc.isRunning {
-		hc.stateMux.Unlock()
-		return
-	}
 	hc.isRunning = false
-	hc.stopped = true
-	close(hc.stopChan)
+	if !hc.stopped {
+		hc.stopped = true
+		close(hc.stopChan)
+	}
 	hc.stateMux.Unlock()
 
 	// Wait for in-flight CheckAll to complete — prevents stale checks
@@ -119,7 +120,9 @@ func (hc *HealthChecker) nextInterval() time.Duration {
 	for _, r := range hc.results {
 		if r.LocalPort > 0 {
 			total++
-			if r.IsHealthy { ok++ }
+			if r.IsHealthy {
+				ok++
+			}
 		}
 	}
 	if total == 0 || ok == total {
@@ -135,8 +138,22 @@ func (hc *HealthChecker) nextInterval() time.Duration {
 // Requires 3 consecutive all-down rounds before triggering recovery,
 // and never triggers during recovery or after Stop.
 func (hc *HealthChecker) CheckAll() {
+	hc.stateMux.Lock()
+	if hc.stopped || (hc.manager != nil && !hc.manager.IsRunning()) {
+		hc.stateMux.Unlock()
+		return
+	}
 	hc.wg.Add(1)
+	hc.stateMux.Unlock()
 	defer hc.wg.Done()
+	hc.checkMux.Lock()
+	defer hc.checkMux.Unlock()
+	hc.stateMux.Lock()
+	stopped := hc.stopped
+	hc.stateMux.Unlock()
+	if stopped {
+		return
+	}
 
 	cfg := hc.config
 
@@ -156,7 +173,9 @@ func (hc *HealthChecker) CheckAll() {
 	for _, r := range hc.results {
 		if r.LocalPort > 0 {
 			total++
-			if r.IsHealthy { ok++ }
+			if r.IsHealthy {
+				ok++
+			}
 		}
 	}
 	hc.resultsMux.RUnlock()
@@ -187,7 +206,11 @@ func (hc *HealthChecker) CheckAll() {
 		hc.appLog.Warn("all %d nodes down for 3 rounds — triggering recovery", total)
 	}
 	hc.allDownCount = 0 // reset so if recovery fails we can fire again
-	go hc.onAllDown()
+	// Keep recovery inside this round so Stop also joins queued/running recovery.
+	callback := hc.onAllDown
+	hc.stateMux.Unlock()
+	callback()
+	hc.stateMux.Lock()
 }
 
 // CheckProxy checks a single proxy's health
@@ -200,7 +223,11 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 	}
 	hc.resultsMux.Unlock()
 
-	dialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), nil, proxy.Direct)
+	timeout := time.Duration(hc.config.HealthCheck.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	dialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), nil, &net.Dialer{Timeout: timeout})
 	if err != nil {
 		hc.updateResult(proxyName, false, 0, fmt.Sprintf("dialer: %v", err))
 		return result
@@ -208,13 +235,14 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.Dial(network, addr)
+			return dialer.(proxy.ContextDialer).DialContext(ctx, network, addr)
 		},
 	}
+	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   time.Duration(hc.config.HealthCheck.TimeoutSeconds) * time.Second,
+		Timeout:   timeout,
 	}
 
 	testURL := hc.config.HealthCheck.TestURL

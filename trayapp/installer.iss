@@ -23,7 +23,15 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+MinVersion=10.0.10240
 PrivilegesRequired=admin
+; Enabled only for explicit signed builds via ISCC /DSignToolCommand.
+; The command is supplied as /Soneproxy-sign=<command>.
+#ifdef SignToolCommand
+SignTool=oneproxy-sign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -31,7 +39,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; Main executable and core DLL
 Source: "oneproxy-tray.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "oneproxy.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "oneproxy.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dxcompiler.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dxil.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App-local MSVC release runtime from the compiler's x64 redistributable directory.
 ; No system-wide runtime installation or network download is needed.
@@ -88,6 +99,26 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Command, Executable: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  { Only this user's exact installation is ours. Never delete the Run key,
+    other values, other users' entries, or a different OneProxy installation. }
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
+      'OneProxy', Command) then
+  begin
+    Executable := ExpandConstant('{app}\{#AppExeName}');
+    StringChangeEx(Command, '/', '\', True);
+    if (CompareText(Command, Executable) = 0) or
+       (CompareText(Command, '"' + Executable + '"') = 0) then
+      if not RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'OneProxy') then
+        Log('Could not remove the OneProxy startup entry.');
+  end;
+end;
+
 function FindWindowEx(Parent, ChildAfter: HWND; ClassName, WindowName: String): HWND;
   external 'FindWindowExW@user32.dll stdcall';
 

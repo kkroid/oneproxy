@@ -13,6 +13,7 @@ import (
 
 	"github.com/kkroid/oneproxy/internal/config"
 	"github.com/kkroid/oneproxy/internal/proxy"
+	"github.com/kkroid/oneproxy/internal/supervisor"
 )
 
 const (
@@ -35,6 +36,9 @@ type runtimePaths struct {
 }
 
 func main() {
+	if code, handled := supervisor.Main(); handled {
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -91,17 +95,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	healthChecker := proxy.NewHealthChecker(cfg, manager)
 	if cfg.DNS.FlushOnFailure {
-		dnsFlusher := proxy.NewDNSFlusher()
-		cooldown := time.Duration(cfg.DNS.FlushIntervalSeconds) * time.Second
-		if cooldown <= 0 {
-			cooldown = 300 * time.Second
-		}
-		dnsFlusher.SetCooldown(cooldown)
-		healthChecker.SetAllDownCallback(func() {
-			if err := dnsFlusher.FlushAll(manager); err != nil {
-				fmt.Fprintf(stderr, "DNS flush failed: %v\n", err)
-			}
-		})
+		fmt.Fprintln(stderr, "Automatic DNS flush disabled: all-down checks do not establish a local DNS cache failure.")
 	}
 
 	sigCh := make(chan os.Signal, 1)

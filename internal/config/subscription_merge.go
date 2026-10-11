@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -49,14 +50,32 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 	matchedIncoming := make(map[int]int)
 
 	if !urlChanged {
-		for incomingIndex, proxy := range prepared {
-			currentIndex, found, err := findSubscriptionMatch(current.Proxies, proxy, matchedCurrent, allowLegacyMatch)
-			if err != nil {
-				return nil, result, err
-			}
-			if found {
-				matchedCurrent[currentIndex] = true
-				matchedIncoming[incomingIndex] = currentIndex
+		// Reserve strong matches for every entry before attempting name fallback.
+		for pass := 0; pass < 4; pass++ {
+			for incomingIndex, proxy := range prepared {
+				if _, matched := matchedIncoming[incomingIndex]; matched {
+					continue
+				}
+				if pass == 2 || pass == 3 {
+					count := 0
+					for _, candidate := range prepared {
+						if (pass == 2 && sameSubscriptionEndpoint(candidate, proxy)) ||
+							(pass == 3 && candidate.Type == proxy.Type && normalizedProxyName(candidate) == normalizedProxyName(proxy)) {
+							count++
+						}
+					}
+					if count != 1 {
+						continue
+					}
+				}
+				currentIndex, found, err := findSubscriptionMatch(current.Proxies, proxy, matchedCurrent, allowLegacyMatch, pass)
+				if err != nil {
+					return nil, result, err
+				}
+				if found {
+					matchedCurrent[currentIndex] = true
+					matchedIncoming[incomingIndex] = currentIndex
+				}
 			}
 		}
 	}
@@ -77,6 +96,7 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 		}
 		if incomingIndex >= 0 {
 			updated := prepared[incomingIndex]
+			updated.Name = existing.Name
 			updated.LocalPort = existing.LocalPort
 			updated.Enabled = existing.Enabled
 			merged = append(merged, updated)
@@ -114,10 +134,28 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 			usedPorts[proxy.LocalPort] = true
 		}
 	}
-	for incomingIndex, proxy := range prepared {
-		if _, matched := matchedIncoming[incomingIndex]; matched {
-			continue
+	usedNames := make(map[string]bool)
+	for _, proxy := range merged {
+		usedNames[normalizedProxyName(proxy)] = true
+	}
+	var additions []ProxyConfig
+	for index, proxy := range prepared {
+		if _, matched := matchedIncoming[index]; !matched {
+			additions = append(additions, proxy)
 		}
+	}
+	// Deterministic allocation of names and ports, independent of feed order.
+	sort.Slice(additions, func(i, j int) bool { return additions[i].SubscriptionKey < additions[j].SubscriptionKey })
+	for _, proxy := range additions {
+		base := strings.TrimSpace(proxy.Name)
+		if base == "" {
+			base = proxy.Server
+		}
+		proxy.Name = base
+		for suffix := 1; usedNames[normalizedProxyName(proxy)]; suffix++ {
+			proxy.Name = fmt.Sprintf("%s (%d)", base, suffix+1)
+		}
+		usedNames[normalizedProxyName(proxy)] = true
 		proxy.LocalPort = nextAvailablePort(usedPorts, 10801)
 		if proxy.LocalPort == 0 {
 			return nil, result, fmt.Errorf("no local port is available for subscription proxy %q", proxy.Name)
@@ -235,35 +273,30 @@ func proxyRuntimeEqual(left, right ProxyConfig) bool {
 }
 
 func prepareSubscriptionProxies(proxies []ProxyConfig) ([]ProxyConfig, error) {
-	nameCounts := make(map[string]int)
+	prepared := make([]ProxyConfig, 0, len(proxies))
+	keys := make(map[string]ProxyConfig)
 	for _, proxy := range proxies {
-		if normalized := normalizedProxyName(proxy); normalized != "" {
-			nameCounts[proxy.Type+"|"+normalized]++
-		}
-	}
-
-	prepared := make([]ProxyConfig, len(proxies))
-	keys := make(map[string]bool)
-	for index, proxy := range proxies {
-		identity := proxy.Type + "|endpoint|" + strings.ToLower(proxy.Server) + "|" + strconv.Itoa(proxy.Port)
-		if normalized := normalizedProxyName(proxy); normalized != "" && nameCounts[proxy.Type+"|"+normalized] == 1 {
-			identity = proxy.Type + "|name|" + normalized
-		}
+		// Names distinguish plans/accounts sharing an endpoint; credentials may rotate.
+		identity := proxy.Type + "|endpoint|" + strings.ToLower(proxy.Server) + "|" + strconv.Itoa(proxy.Port) + "|name|" + normalizedProxyName(proxy)
 		hash := sha256.Sum256([]byte(identity))
 		proxy.Source = ProxySourceSubscription
 		proxy.SubscriptionKey = hex.EncodeToString(hash[:16])
 		proxy.MissingUpdates = 0
 		proxy.LocalPort = 0
-		if keys[proxy.SubscriptionKey] {
+		proxy.Enabled = true
+		if previous, found := keys[proxy.SubscriptionKey]; found {
+			if reflect.DeepEqual(previous, proxy) {
+				continue
+			}
 			return nil, fmt.Errorf("subscription contains duplicate proxy identity for %q", proxy.Name)
 		}
-		keys[proxy.SubscriptionKey] = true
-		prepared[index] = proxy
+		keys[proxy.SubscriptionKey] = proxy
+		prepared = append(prepared, proxy)
 	}
 	return prepared, nil
 }
 
-func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map[int]bool, allowLegacy bool) (int, bool, error) {
+func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map[int]bool, allowLegacy bool, pass int) (int, bool, error) {
 	matchBy := func(predicate func(ProxyConfig) bool) (int, bool, error) {
 		matched := -1
 		for index, proxy := range proxies {
@@ -281,19 +314,28 @@ func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map
 		return matched, matched >= 0, nil
 	}
 
-	if index, found, err := matchBy(func(proxy ProxyConfig) bool {
-		return proxy.Source == ProxySourceSubscription && proxy.SubscriptionKey == incoming.SubscriptionKey
-	}); found || err != nil {
-		return index, found, err
+	switch pass {
+	case 0:
+		return matchBy(func(proxy ProxyConfig) bool {
+			return proxy.Source == ProxySourceSubscription && proxy.SubscriptionKey == incoming.SubscriptionKey
+		})
+	case 1:
+		return matchBy(func(proxy ProxyConfig) bool {
+			return sameSubscriptionEndpoint(proxy, incoming) && normalizedProxyName(proxy) == normalizedProxyName(incoming)
+		})
+	case 2:
+		return matchBy(func(proxy ProxyConfig) bool {
+			return sameSubscriptionEndpoint(proxy, incoming)
+		})
+	default:
+		return matchBy(func(proxy ProxyConfig) bool {
+			return proxy.Type == incoming.Type && normalizedProxyName(proxy) != "" && normalizedProxyName(proxy) == normalizedProxyName(incoming)
+		})
 	}
-	if index, found, err := matchBy(func(proxy ProxyConfig) bool {
-		return proxy.Type == incoming.Type && normalizedProxyName(proxy) != "" && normalizedProxyName(proxy) == normalizedProxyName(incoming)
-	}); found || err != nil {
-		return index, found, err
-	}
-	return matchBy(func(proxy ProxyConfig) bool {
-		return proxy.Type == incoming.Type && strings.EqualFold(proxy.Server, incoming.Server) && proxy.Port == incoming.Port
-	})
+}
+
+func sameSubscriptionEndpoint(left, right ProxyConfig) bool {
+	return left.Type == right.Type && strings.EqualFold(left.Server, right.Server) && left.Port == right.Port
 }
 
 func normalizedProxyName(proxy ProxyConfig) string {

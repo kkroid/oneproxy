@@ -1,9 +1,76 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"reflect"
 	"testing"
 )
+
+func TestMergeSubscriptionSharedEndpointDistinctNames(t *testing.T) {
+	for _, differentAccount := range []bool{false, true} {
+		for _, migration := range []string{"fresh", "legacy", "name-key", "endpoint-key"} {
+			t.Run(fmt.Sprintf("%s/different-account=%v", migration, differentAccount), func(t *testing.T) {
+				current := subscriptionTestConfig()
+				current.Proxies = current.Proxies[:1]
+				a := ProxyConfig{Name: "Plan A", Type: "shadowsocks", Server: "shared.example.com", Port: 443, Method: "aes-256-gcm", Password: "synthetic-a", LocalPort: 10831}
+				b := a
+				b.Name, b.LocalPort, b.Enabled = "Plan B", 10832, true
+				if differentAccount {
+					b.Password = "synthetic-b"
+				}
+				if migration != "fresh" {
+					current.Proxies = append(current.Proxies, a, b)
+					if migration == "endpoint-key" {
+						current.Proxies = current.Proxies[:2] // r1 supported just one node per endpoint.
+					}
+					if migration != "legacy" {
+						current.SubscriptionMigrated = true
+						for i := 1; i < len(current.Proxies); i++ {
+							proxy := &current.Proxies[i]
+							identity := proxy.Type + "|name|" + normalizedProxyName(*proxy)
+							if migration == "endpoint-key" {
+								identity = proxy.Type + "|endpoint|shared.example.com|443"
+							}
+							hash := sha256.Sum256([]byte(identity))
+							proxy.Source, proxy.SubscriptionKey = ProxySourceSubscription, hex.EncodeToString(hash[:16])
+						}
+					}
+				}
+				next, _, err := MergeSubscription(current, []ProxyConfig{b, a, b}, current.SubscriptionURL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(next.Proxies) != 3 || !reflect.DeepEqual(next.Proxies[0], current.Proxies[0]) {
+					t.Fatal("shared endpoint entries were lost or manual node changed")
+				}
+				for _, proxy := range next.Proxies[1:] {
+					want := a
+					if proxy.Name == b.Name {
+						want = b
+					}
+					if proxy.Name != want.Name || proxy.Password != want.Password {
+						t.Fatal("shared endpoint accounts were mixed")
+					}
+					if migration != "fresh" && (migration != "endpoint-key" || proxy.Name == a.Name) && (proxy.LocalPort != want.LocalPort || proxy.Enabled != want.Enabled) {
+						t.Fatal("migration moved port or enabled state between accounts")
+					}
+				}
+				for i := 0; i < 3; i++ {
+					incoming := []ProxyConfig{a, b}
+					if i%2 == 0 {
+						incoming = []ProxyConfig{b, a}
+					}
+					again, result, err := MergeSubscription(next, incoming, current.SubscriptionURL)
+					if err != nil || result.Changed || !reflect.DeepEqual(next, again) {
+						t.Fatalf("shared endpoint repeat/reorder drift: %+v, %v", result, err)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestMergeSubscriptionRemovesBundledExample(t *testing.T) {
 	for _, migrated := range []bool{false, true} {
@@ -232,15 +299,127 @@ func TestMergeSubscriptionURLChangeReplacesOnlySubscriptionNodes(t *testing.T) {
 	}
 }
 
-func TestMergeSubscriptionRejectsManualNameConflict(t *testing.T) {
+func TestMergeSubscriptionPreservesManualNameConflict(t *testing.T) {
 	current := subscriptionTestConfig()
 	current.Proxies[0].Source = "manual"
-	_, _, err := MergeSubscription(current, []ProxyConfig{{
+	next, _, err := MergeSubscription(current, []ProxyConfig{{
 		Name: "Manual", Type: "shadowsocks", Server: "subscription.example.com", Port: 443,
 		Method: "aes-256-gcm", Password: "password",
 	}}, current.SubscriptionURL)
-	if err == nil {
-		t.Fatal("MergeSubscription() accepted a manual/subscription name conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(next.Proxies[0], current.Proxies[0]) || next.Proxies[len(next.Proxies)-1].Name == "Manual" {
+		t.Fatal("manual node was changed or subscription name was not disambiguated")
+	}
+}
+
+func TestMergeSubscriptionNameCollisionsStable(t *testing.T) {
+	a := subscriptionTestConfig().Proxies[1]
+	a.Name = "Shared"
+	b := a
+	b.Server = "b.example.com"
+	b.Name = " shared "
+	for _, legacy := range []bool{false, true} {
+		current := subscriptionTestConfig()
+		current.Proxies = current.Proxies[:1]
+		if legacy {
+			current.Proxies = append(current.Proxies, a)
+		}
+		// New endpoint comes first: it must not steal the legacy endpoint's state.
+		incoming := []ProxyConfig{b, a, a}
+		next, _, err := MergeSubscription(current, incoming, current.SubscriptionURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(next.Proxies) != 3 {
+			t.Fatalf("duplicate was not collapsed: %d", len(next.Proxies))
+		}
+		if legacy && (next.Proxies[1].Server != a.Server || next.Proxies[1].Name != a.Name || next.Proxies[1].Enabled || next.Proxies[1].LocalPort != a.LocalPort) {
+			t.Fatal("legacy state moved to another endpoint")
+		}
+		for i := 0; i < 3; i++ {
+			incoming[0], incoming[1] = incoming[1], incoming[0]
+			again, result, err := MergeSubscription(next, incoming, current.SubscriptionURL)
+			if err != nil || result.Changed || !reflect.DeepEqual(next, again) {
+				t.Fatalf("repeat/reorder drift: %+v, %v", result, err)
+			}
+		}
+	}
+}
+
+func TestMergeSubscriptionOldNameKeyAndSuffixCollision(t *testing.T) {
+	current := subscriptionTestConfig()
+	a := current.Proxies[1]
+	oldHash := sha256.Sum256([]byte(a.Type + "|name|" + normalizedProxyName(a)))
+	current.Proxies[1].Source = ProxySourceSubscription
+	current.Proxies[1].SubscriptionKey = hex.EncodeToString(oldHash[:16])
+	current.SubscriptionMigrated = true
+	manual := current.Proxies[0]
+	manual.Name, manual.LocalPort = "Node A (2)", 10821
+	current.Proxies = append(current.Proxies, manual)
+	b := a
+	b.Server = "b.example.com"
+	for _, incoming := range [][]ProxyConfig{{b, a}, {a, b}} {
+		next, _, err := MergeSubscription(current, incoming, current.SubscriptionURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.Proxies[1].Server != a.Server || next.Proxies[1].Name != a.Name || next.Proxies[1].Enabled || next.Proxies[1].LocalPort != a.LocalPort || next.Proxies[3].Name != "Node A (3)" {
+			t.Fatal("old name identity or suffix collision was not preserved")
+		}
+		if !reflect.DeepEqual(next.Proxies[2], manual) {
+			t.Fatal("manual suffix owner changed")
+		}
+		current = next
+	}
+}
+
+func TestMergeSubscriptionRejectsAmbiguousEndpointWithoutMutation(t *testing.T) {
+	current := subscriptionTestConfig()
+	before, _ := cloneConfig(current)
+	a := current.Proxies[1]
+	b := a
+	b.Password = "different-account"
+	if _, _, err := MergeSubscription(current, []ProxyConfig{a, b}, current.SubscriptionURL); err == nil {
+		t.Fatal("conflicting accounts on one identity must not silently overwrite")
+	}
+	if !reflect.DeepEqual(current, before) {
+		t.Fatal("failed merge changed original config")
+	}
+}
+
+func TestMergeSubscriptionDistinctEndpointsSameName(t *testing.T) {
+	for _, name := range []string{"Shared", " shared "} {
+		current := subscriptionTestConfig()
+		current.Proxies = current.Proxies[:1]
+		a := current.Proxies[0]
+		a.Name, a.Server = "Shared", "a.example.com"
+		b := a
+		b.Name, b.Server = name, "b.example.com"
+		first, _, err := MergeSubscription(current, []ProxyConfig{a, b}, current.SubscriptionURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reversed, _, err := MergeSubscription(current, []ProxyConfig{b, a}, current.SubscriptionURL)
+		if err != nil || !reflect.DeepEqual(first, reversed) {
+			t.Fatal("initial order changed allocated names or ports")
+		}
+	}
+}
+
+func TestMergeSubscriptionReservesEndpointBeforeNameFallback(t *testing.T) {
+	current := subscriptionTestConfig()
+	a := current.Proxies[1]
+	b := a
+	b.Server = "b.example.com"
+	a.Name = "Renamed"
+	next, _, err := MergeSubscription(current, []ProxyConfig{b, a}, current.SubscriptionURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Proxies) != 3 || next.Proxies[1].Server != a.Server || next.Proxies[1].Name != "Node A" || next.Proxies[1].Enabled || next.Proxies[1].LocalPort != a.LocalPort {
+		t.Fatal("weak name match stole the existing endpoint's state")
 	}
 }
 

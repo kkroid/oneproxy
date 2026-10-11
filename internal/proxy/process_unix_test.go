@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -35,9 +37,9 @@ func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	// exec keeps a single process that ignores SIGTERM. A shell spawning sleep
 	// leaves an orphan after group SIGKILL; its reaping depends on the host init.
-	cmd := exec.Command("sh", "-c", "trap '' TERM; : > \"$1\"; exec sleep 30", "sh", ready)
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo $$ > \"$1\"; exec sleep 30", "sh", ready)
 	configureProcessCommand(cmd)
-	process := platformProcess{stopTimeout: 100 * time.Millisecond}
+	process := platformProcess{stopTimeout: 5 * time.Second}
 	if err := process.start(cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -64,18 +66,25 @@ func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	if _, err := os.Stat(ready); err != nil {
 		t.Fatalf("helper did not become ready: %v", err)
 	}
+	data, err := os.ReadFile(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || childPID <= 0 {
+		t.Fatalf("invalid child PID: %q", data)
+	}
 	started := time.Now()
 	if err := process.stop(cmd, done); err != nil {
 		t.Fatalf("stop() error = %v", err)
 	}
-	if elapsed := time.Since(started); elapsed < 80*time.Millisecond {
+	if elapsed := time.Since(started); elapsed < 1800*time.Millisecond {
 		t.Fatalf("stop returned before graceful timeout: %v", elapsed)
 	}
-	status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
-	if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
-		t.Fatalf("helper exit = %v, want SIGKILL", cmd.ProcessState)
+	if !cmd.ProcessState.Success() {
+		t.Fatalf("supervisor exit = %v, want successful cleanup", cmd.ProcessState)
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("process group %d: signal 0 returned %v, want ESRCH", cmd.Process.Pid, err)
+	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("child %d: signal 0 returned %v, want ESRCH", childPID, err)
 	}
 }

@@ -26,8 +26,10 @@ type Manager struct {
 	singboxPath   string
 	logPath       string
 	isRunning     bool
+	ready         bool
 	stopping      bool
 	mutex         sync.RWMutex
+	operations    sync.Mutex
 	stopChan      chan struct{}
 	done          chan error
 	lifecycleDone chan struct{}
@@ -42,7 +44,7 @@ type Manager struct {
 // NewManagerWithLog is like NewManager but accepts a custom log path. Managers
 // created by this constructor retain the DLL's automatic restart behavior.
 func NewManagerWithLog(singboxPath, configPath, logPath string) *Manager {
-	return newManager(singboxPath, configPath, logPath, true, 0)
+	return newManager(singboxPath, configPath, logPath, true, defaultStartupWindow)
 }
 
 // NewForegroundManagerWithLog creates a foreground manager that never restarts
@@ -107,6 +109,12 @@ func (m *Manager) Check() error {
 
 // Start starts the sing-box process.
 func (m *Manager) Start() error {
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	return m.start()
+}
+
+func (m *Manager) start() error {
 	m.mutex.Lock()
 	if m.isRunning {
 		m.mutex.Unlock()
@@ -151,27 +159,11 @@ func (m *Manager) Start() error {
 	m.stopping = false
 	m.stopChan = stopChan
 	m.lifecycleDone = lifecycleDone
-	startupWindow := m.startupWindow
 	m.mutex.Unlock()
 
-	go m.monitor(cmd, stopChan, m.done, lifecycleDone)
-	if startupWindow <= 0 {
-		return nil
-	}
-
-	timer := time.NewTimer(startupWindow)
-	defer timer.Stop()
-	select {
-	case err := <-m.done:
-		if err == nil {
-			return errors.New("sing-box exited during startup")
-		}
-		return err
-	case <-lifecycleDone:
-		return errors.New("sing-box exited during startup")
-	case <-timer.C:
-		return nil
-	}
+	started := make(chan error, 1)
+	go m.monitor(cmd, stopChan, m.done, lifecycleDone, started)
+	return <-started
 }
 
 // Done returns unexpected terminal errors across all process lifecycles.
@@ -184,6 +176,12 @@ func (m *Manager) Done() <-chan error {
 
 // Stop stops the sing-box process and waits until it has been reaped.
 func (m *Manager) Stop() error {
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	return m.stop()
+}
+
+func (m *Manager) stop() error {
 	m.mutex.Lock()
 	if !m.isRunning {
 		m.mutex.Unlock()
@@ -202,6 +200,10 @@ func (m *Manager) Stop() error {
 	close(stopChan)
 	m.mutex.Unlock()
 
+	if cmd == nil {
+		<-lifecycleDone
+		return nil
+	}
 	if err := m.process.stop(cmd, lifecycleDone); err != nil {
 		return fmt.Errorf("failed to stop sing-box: %w", err)
 	}
@@ -213,8 +215,9 @@ func (m *Manager) startCommand(logFile *os.File) (*exec.Cmd, error) {
 	configureProcessCommand(cmd)
 	cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
 	cmd.Env = singboxEnvironment()
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	output := &processOutput{file: logFile}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := m.process.start(cmd); err != nil {
 		return nil, fmt.Errorf("failed to start sing-box: %w", err)
 	}
@@ -227,11 +230,15 @@ func singboxEnvironment() []string {
 
 // Restart restarts the sing-box process.
 func (m *Manager) Restart() error {
-	if err := m.Stop(); err != nil && m.IsRunning() {
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	if !m.IsRunning() {
+		return errors.New("sing-box is not running")
+	}
+	if err := m.stop(); err != nil {
 		return fmt.Errorf("failed to stop: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
-	if err := m.Start(); err != nil {
+	if err := m.start(); err != nil {
 		return fmt.Errorf("failed to start: %w", err)
 	}
 	return nil
@@ -241,7 +248,7 @@ func (m *Manager) Restart() error {
 func (m *Manager) IsRunning() bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	return m.isRunning
+	return m.isRunning && m.ready && !m.stopping
 }
 
 // GetLogs returns the last N lines from the log file.
@@ -277,7 +284,7 @@ func (m *Manager) SetConfigPath(path string) {
 func (m *Manager) GetPID() int {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	if m.cmd != nil && m.cmd.Process != nil {
+	if m.ready && !m.stopping && m.cmd != nil && m.cmd.Process != nil {
 		return m.cmd.Process.Pid
 	}
 	return 0
@@ -340,30 +347,62 @@ func rotateLogs(dir string) {
 	}
 }
 
-// monitor is the only goroutine that calls Cmd.Wait for a process lifecycle.
-func (m *Manager) monitor(cmd *exec.Cmd, stopChan <-chan struct{}, done chan<- error, lifecycleDone chan<- struct{}) {
+// monitor owns each process lifecycle and starts exactly one Wait per child.
+func (m *Manager) monitor(cmd *exec.Cmd, stopChan <-chan struct{}, done chan<- error, lifecycleDone chan<- struct{}, started chan<- error) {
 	const maxAttempts = 3
 	var terminalErr error
+	startupReported := false
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		waitErr := cmd.Wait()
+		// Wait drains both output streams before diagnostics are read. An early
+		// exit (including an unsuccessful automatic restart) is never retried.
+		waited := make(chan error, 1)
+		go func(cmd *exec.Cmd) { waited <- cmd.Wait() }(cmd)
+		timer := time.NewTimer(m.startupWindow)
+		var waitErr error
+		earlyExit := false
+		select {
+		case waitErr = <-waited:
+			earlyExit = true
+		case <-timer.C:
+			select {
+			case waitErr = <-waited:
+				earlyExit = true
+			default:
+			}
+		}
+		timer.Stop()
+		if !earlyExit {
+			m.mutex.Lock()
+			m.ready = true
+			m.mutex.Unlock()
+			if !startupReported {
+				started <- nil
+				startupReported = true
+			}
+			waitErr = <-waited
+		}
+		m.mutex.Lock()
+		m.ready = false
+		m.cmd = nil
+		m.mutex.Unlock()
 		if channelClosed(stopChan) {
 			terminalErr = nil
 			break
 		}
-		if !m.autoRestart {
-			terminalErr = unexpectedExitError(waitErr)
+		if earlyExit || !m.autoRestart {
+			terminalErr = processExitError(cmd, waitErr)
 			break
 		}
 		if attempt == maxAttempts {
-			terminalErr = fmt.Errorf("sing-box exited after %d attempts: %w", maxAttempts, unexpectedExitError(waitErr))
+			terminalErr = fmt.Errorf("sing-box exited after %d attempts: %w", maxAttempts, processExitError(cmd, waitErr))
 			break
 		}
 
 		if m.appLog != nil {
 			m.appLog.Warn("sing-box crashed, auto-restarting (attempt %d/%d)", attempt+1, maxAttempts)
 		}
-		timer := time.NewTimer(m.restartDelay)
+		timer = time.NewTimer(m.restartDelay)
 		select {
 		case <-stopChan:
 			timer.Stop()
@@ -389,6 +428,7 @@ func (m *Manager) monitor(cmd *exec.Cmd, stopChan <-chan struct{}, done chan<- e
 			_ = m.logFile.Close()
 		}
 		m.logFile = logFile
+		m.process.close()
 		cmd, err = m.startCommand(logFile)
 		if err != nil {
 			_ = logFile.Close()
@@ -410,12 +450,13 @@ func (m *Manager) monitor(cmd *exec.Cmd, stopChan <-chan struct{}, done chan<- e
 		_ = m.logFile.Close()
 		m.logFile = nil
 	}
-	m.mutex.Unlock()
-
-	if terminalErr != nil {
+	if !startupReported {
+		started <- terminalErr
+	} else if terminalErr != nil {
 		done <- terminalErr
 	}
 	close(lifecycleDone)
+	m.mutex.Unlock()
 	if terminalErr != nil && m.appLog != nil {
 		m.appLog.Error("sing-box stopped: %v", terminalErr)
 	}
@@ -435,4 +476,35 @@ func channelClosed(ch <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+// processOutput keeps only this attempt's final diagnostic bytes, never old logs.
+// os/exec serializes Write calls when Stdout and Stderr use the same writer.
+type processOutput struct {
+	file *os.File
+	tail []byte
+}
+
+func (p *processOutput) Write(data []byte) (int, error) {
+	const limit = 4096
+	n, err := p.file.Write(data)
+	if len(data) >= limit {
+		p.tail = append(p.tail[:0], data[len(data)-limit:]...)
+	} else {
+		if excess := len(p.tail) + len(data) - limit; excess > 0 {
+			p.tail = p.tail[excess:]
+		}
+		p.tail = append(p.tail, data...)
+	}
+	return n, err
+}
+
+func processExitError(cmd *exec.Cmd, err error) error {
+	exitErr := unexpectedExitError(err)
+	if output, ok := cmd.Stderr.(*processOutput); ok {
+		if message := strings.TrimSpace(string(output.tail)); message != "" {
+			return fmt.Errorf("%w: %s", exitErr, message)
+		}
+	}
+	return exitErr
 }

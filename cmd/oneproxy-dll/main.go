@@ -19,7 +19,7 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
-const appVersion = "0.8.1"
+var appVersion = "0.8.1" // Windows release builds set this from installer metadata.
 
 var (
 	gManager       *proxy.Manager
@@ -73,8 +73,25 @@ func resolveConfig(configPath string) (string, error) {
 func OneProxy_Start(configPath *C.char) *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
+	return errStr(startProxy(C.GoString(configPath)))
+}
 
-	cp := C.GoString(configPath)
+// startProxy requires gMu. Dispose the previous session before replacing globals.
+func startProxy(cp string) error {
+	if gManager != nil && gManager.IsRunning() {
+		return fmt.Errorf("already running")
+	}
+	stopSubscriptionUpdater()
+	if gHealthChecker != nil {
+		gHealthChecker.Stop()
+	}
+	if gManager != nil {
+		if err := gManager.Stop(); err != nil {
+			return fmt.Errorf("stop stale sing-box lifecycle: %w", err)
+		}
+	}
+	gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
+
 	found, err := resolveConfig(cp)
 	if err != nil {
 		// Fresh install or config deleted — copy the bundled placeholder.
@@ -87,13 +104,13 @@ func OneProxy_Start(configPath *C.char) *C.char {
 			}
 		}
 		if err != nil {
-			return errStr(fmt.Errorf("config not found and no placeholder available"))
+			return fmt.Errorf("config not found and no placeholder available")
 		}
 	}
 
 	cfg, err := config.Load(found)
 	if err != nil {
-		return errStr(err)
+		return err
 	}
 
 	if routeMode := loadRouteModeOverride(); routeMode != "" {
@@ -118,7 +135,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 
 	gen := config.NewSingBoxGenerator(cfg, resourceDir(ed))
 	if err := gen.SaveToFile(genCfg); err != nil {
-		return errStr(err)
+		return err
 	}
 
 	// Find sing-box in the development layout or the installed app bundle.
@@ -134,7 +151,7 @@ func OneProxy_Start(configPath *C.char) *C.char {
 			goto started
 		}
 	}
-	return errStr(fmt.Errorf("%s not found (cwd=%s, exe=%s)", singBoxExecutableName(), cwd, ed))
+	return fmt.Errorf("%s not found (cwd=%s, exe=%s)", singBoxExecutableName(), cwd, ed)
 
 started:
 	gHealthChecker = proxy.NewHealthChecker(cfg, gManager)
@@ -142,27 +159,20 @@ started:
 	gDNSFlusher = proxy.NewDNSFlusher()
 	gDNSFlusher.SetLogger(gLogger)
 
-	// Only register all-down recovery if config tells us to.
+	// Preserve the configured manual cooldown, but all-down is not DNS evidence.
 	if cfg.DNS.FlushOnFailure {
 		cooldown := time.Duration(cfg.DNS.FlushIntervalSeconds) * time.Second
 		if cooldown <= 0 {
 			cooldown = 300 * time.Second
 		}
 		gDNSFlusher.SetCooldown(cooldown)
-		gHealthChecker.SetAllDownCallback(func() {
-			if gLogger != nil {
-				gLogger.Info("all-down recovery: flushing DNS (cooldown=%vs)", int(cooldown.Seconds()))
-			}
-			if err := gDNSFlusher.FlushAll(gManager); err != nil {
-				if gLogger != nil {
-					gLogger.Error("all-down recovery failed: %v", err)
-				}
-			}
-		})
+		if gLogger != nil {
+			gLogger.Info("automatic DNS flush disabled: all-down checks do not establish a local DNS cache failure")
+		}
 	}
 
 	if err := gManager.Start(); err != nil {
-		return errStr(err)
+		return err
 	}
 	if cfg.HealthCheck.Enabled {
 		if gLogger != nil {
@@ -174,8 +184,33 @@ started:
 	if gLogger != nil {
 		gLogger.Info("started OK")
 	}
+	watchManagerLifecycle(gManager, gHealthChecker)
 	startSubscriptionUpdater()
 	return nil
+}
+
+// watchManagerLifecycle stops health checks when sing-box exits unexpectedly.
+func watchManagerLifecycle(manager *proxy.Manager, checker *proxy.HealthChecker) {
+	go func() {
+		err, ok := <-manager.Done()
+		if !ok {
+			return
+		}
+		gMu.Lock()
+		defer gMu.Unlock()
+		if gManager != manager || gHealthChecker != checker {
+			return
+		}
+		if checker != nil {
+			checker.Stop()
+		}
+		if gLogger != nil && err != nil {
+			gLogger.Error("sing-box lifecycle ended: %v", err)
+		}
+		// Publish a fully stopped state so a later Start cannot retain stale
+		// health/config objects from the failed lifecycle.
+		gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
+	}()
 }
 
 //export OneProxy_Stop
@@ -189,8 +224,12 @@ func OneProxy_Stop() *C.char {
 	if gHealthChecker != nil {
 		gHealthChecker.Stop()
 	}
+	var stopErr error
 	if gManager != nil {
-		gManager.Stop()
+		stopErr = gManager.Stop()
+	}
+	if stopErr != nil {
+		return errStr(stopErr)
 	}
 	gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
 	if gLogger != nil {
@@ -212,7 +251,9 @@ func OneProxy_Restart() *C.char {
 	if gHealthChecker != nil {
 		gHealthChecker.Stop()
 	}
-	gManager.Restart()
+	if err := gManager.Restart(); err != nil {
+		return errStr(err)
+	}
 	if gConfig != nil && gConfig.HealthCheck.Enabled && gHealthChecker != nil {
 		gHealthChecker.Start()
 	}
@@ -285,6 +326,8 @@ func OneProxy_Status() *C.char {
 
 //export OneProxy_HealthCheck
 func OneProxy_HealthCheck() *C.char {
+	gMu.Lock()
+	defer gMu.Unlock()
 	if gHealthChecker == nil || gManager == nil || !gManager.IsRunning() {
 		return errStr(fmt.Errorf("not running"))
 	}
@@ -294,14 +337,17 @@ func OneProxy_HealthCheck() *C.char {
 
 //export OneProxy_FlushDNS
 func OneProxy_FlushDNS() *C.char {
+	return errStr(flushDNS((*proxy.DNSFlusher).FlushAll))
+}
+
+// flushDNS serializes the entire manual operation with Start, Stop and Restart.
+func flushDNS(flush func(*proxy.DNSFlusher, *proxy.Manager) error) error {
+	gMu.Lock()
+	defer gMu.Unlock()
 	if gDNSFlusher == nil || gManager == nil {
-		return errStr(fmt.Errorf("not running"))
+		return fmt.Errorf("not running")
 	}
-	if !gDNSFlusher.CanFlush() {
-		return errStr(fmt.Errorf("too frequent"))
-	}
-	gDNSFlusher.FlushAll(gManager)
-	return nil
+	return flush(gDNSFlusher, gManager)
 }
 
 // reloadAndRestart regenerates singbox_generated.json from gConfig and restarts
@@ -317,6 +363,10 @@ func reloadAndRestart() error {
 	if err := gen.SaveToFile(genCfg); err != nil {
 		return err
 	}
+	if gHealthChecker != nil {
+		gHealthChecker.Stop()
+		gHealthChecker.SetConfig(gConfig)
+	}
 	if gManager == nil || !gManager.IsRunning() {
 		if gLogger != nil {
 			gLogger.Info("config saved — a restart is needed to apply")
@@ -324,10 +374,6 @@ func reloadAndRestart() error {
 		return nil
 	}
 	gManager.SetConfigPath(genCfg)
-	if gHealthChecker != nil {
-		gHealthChecker.Stop()
-		gHealthChecker.SetConfig(gConfig)
-	}
 	if err := gManager.Restart(); err != nil {
 		return err
 	}

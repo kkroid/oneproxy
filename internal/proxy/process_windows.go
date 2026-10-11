@@ -3,9 +3,7 @@
 package proxy
 
 import (
-	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -51,6 +49,7 @@ func (p *platformProcess) start(cmd *exec.Cmd) error {
 	)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		p.close()
 		return fmt.Errorf("open process handle: %w", err)
 	}
@@ -58,6 +57,7 @@ func (p *platformProcess) start(cmd *exec.Cmd) error {
 
 	if err := windows.AssignProcessToJobObject(job, processHandle); err != nil {
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		p.close()
 		return fmt.Errorf("assign process to job: %w", err)
 	}
@@ -72,9 +72,6 @@ func (p *platformProcess) stop(cmd *exec.Cmd, done <-chan struct{}) error {
 	}
 	err := cmd.Process.Kill()
 	p.close()
-	if err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
-	}
 	timeout := p.stopTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -85,6 +82,9 @@ func (p *platformProcess) stop(cmd *exec.Cmd, done <-chan struct{}) error {
 	case <-done:
 		return nil
 	case <-timer.C:
+		if err != nil {
+			return fmt.Errorf("kill sing-box: %w", err)
+		}
 		return fmt.Errorf("timed out waiting for sing-box to exit")
 	}
 }
