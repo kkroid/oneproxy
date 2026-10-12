@@ -129,6 +129,8 @@ function PrepareUpgrade(Directory: String): Integer;
   external 'PrepareUpgrade@files:oneproxy-upgrade.dll stdcall';
 procedure FinishUpgrade();
   external 'FinishUpgrade@files:oneproxy-upgrade.dll stdcall';
+procedure ReleaseUninstallGuards();
+  external 'ReleaseUninstallGuards@files:oneproxy-upgrade.dll stdcall';
 procedure UpgradeError(Buffer: String; Count: Integer);
   external 'UpgradeError@files:oneproxy-upgrade.dll stdcall';
 
@@ -142,15 +144,18 @@ begin
     Result := 'Cannot create the installation directory. Check permissions and retry, or cancel Setup.';
     Exit;
   end;
-  if PrepareUpgrade(ExpandConstant('{app}')) = 0 then
+  while PrepareUpgrade(ExpandConstant('{app}')) = 0 do
   begin
     SetLength(Detail, 2048);
     UpgradeError(Detail, 2048);
     Detail := Copy(Detail, 1, Pos(#0, Detail) - 1);
     Log(Detail);
-    Result := 'OneProxy could not be stopped safely. ' + Detail + #13#10 +
+    Result := 'OneProxy could not be prepared for upgrade safely. ' + Detail + #13#10 +
       'No application files have been replaced. Resolve the reported problem and click Retry, or cancel Setup.';
+    if SuppressibleMsgBox(Result, mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY then
+      Exit;
   end;
+  Result := '';
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
@@ -162,6 +167,9 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  { Inno reads/appends the DAT and replaces the EXE during installation, before
+    ssPostInstall. Hand back only its files; keep all application guards. }
+  if CurStep = ssInstall then ReleaseUninstallGuards();
   { Release before the optional post-install launch. }
   if CurStep = ssPostInstall then FinishUpgrade();
 end;

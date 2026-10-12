@@ -87,47 +87,11 @@ exit /b %ERRORLEVEL%
     & $harness --fixture-test $fixtureRoot
     if ($LASTEXITCODE) { throw 'Fallback/identity/locking tests failed' }
 
-    # Execute a real Inno installer with the production shutdown and payload code.
-    # Only integration side effects are redirected/disabled: uninstall registration,
-    # shell shortcuts, previous-directory lookup, and the user-config destination.
-    # This is deliberately identified as an isolation variant, not the release EXE.
-    $script = Get-Content (Join-Path $repo 'trayapp\build\installer.iss') -Raw
-    $script = $script -replace '(?m)^PrivilegesRequired=admin', 'PrivilegesRequired=lowest'
-    $script = $script -replace '(?m)^AppId=.*', ('AppId=OneProxy-Upgrade-Test-' + [guid]::NewGuid())
-    $script = $script.Replace('[Setup]', "[Setup]`nUninstallable=no`nCreateUninstallRegKey=no`nUsePreviousAppDir=no`nUsePreviousGroup=no`nUsePreviousTasks=no")
-    $script = $script -replace '(?m)^OutputDir=.*', ('OutputDir=' + $out)
-    $script = $script -replace '(?m)^OutputBaseFilename=.*', 'OutputBaseFilename=isolated-setup'
-    $script = $script -replace '(?s)\[Icons\].*?(?=\[Tasks\])', ''
-    $script = $script.Replace('{%USERPROFILE}\.oneproxy', '{app}\profile\.oneproxy')
-    # Absolute SourceDir keeps the staged release payload identical.
-    $script = $script.Replace('[Setup]', "[Setup]`nSourceDir=$repo\trayapp\build")
-    $isolatedScript = Join-Path $out 'isolated-installer.iss'
-    Set-Content -LiteralPath $isolatedScript -Value $script -Encoding UTF8
-    & $ISCC $isolatedScript
-    if ($LASTEXITCODE) { throw 'Isolated installer compilation failed' }
+    # Real uninstall generation/registration is mandatory for setup coverage.
     foreach ($setupName in @('legacy','baseline')) {
-        $installTarget = Join-Path $out "setup-$setupName"
-        Copy-Payload $sources[$setupName] $installTarget 28280
-        $configPaths = @('config.json','profile\.oneproxy\config.json','profile\.oneproxy\subscription-sentinel.txt')
-        $hashes = @($configPaths | ForEach-Object { (Get-FileHash (Join-Path $installTarget $_)).Hash })
-        $payloadPaths = @('oneproxy-tray.exe','oneproxy.exe','oneproxy.dll','bin\sing-box.exe')
-        $oldPayload = @($payloadPaths | ForEach-Object { (Get-FileHash (Join-Path $installTarget $_)).Hash })
-        & $harness --setup-locked $installTarget (Join-Path $out 'isolated-setup.exe')
-        if ($LASTEXITCODE) { throw 'Locked full setup did not fail safely' }
-        for ($i = 0; $i -lt $payloadPaths.Count; $i++) {
-            if ((Get-FileHash (Join-Path $installTarget $payloadPaths[$i])).Hash -ne $oldPayload[$i]) { throw 'Blocked setup replaced payload' }
-        }
-        Write-Host 'PASS blocked full setup leaves old payload unchanged; retry after removing lock'
-        & $harness --setup $installTarget (Join-Path $out 'isolated-setup.exe')
-        if ($LASTEXITCODE) { throw 'Full isolated setup upgrade failed' }
-        for ($i = 0; $i -lt $configPaths.Count; $i++) {
-            if ((Get-FileHash (Join-Path $installTarget $configPaths[$i])).Hash -ne $hashes[$i]) { throw 'User state changed during setup' }
-        }
-        foreach ($name in @('oneproxy-tray.exe','oneproxy.exe','oneproxy.dll','bin\sing-box.exe')) {
-            if ((Get-FileHash (Join-Path $installTarget $name)).Hash -ne
-                (Get-FileHash (Join-Path $repo "trayapp\build\$name")).Hash) { throw "Installed payload mismatch: $name" }
-        }
-        Write-Host 'PASS full isolated setup replaced payload and preserved configuration/subscription state'
+        & (Join-Path $PSScriptRoot 'test-windows-uninstall-upgrade.ps1') `
+            -LegacyBuild $sources[$setupName] `
+            -OutputDirectory (Join-Path $out "setup-$setupName") -VcVars $VcVars -ISCC $ISCC
     }
     foreach ($process in $before) {
         $after = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)"

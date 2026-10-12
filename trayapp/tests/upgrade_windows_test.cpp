@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <filesystem>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +12,7 @@
 
 extern "C" int __stdcall PrepareUpgrade(const wchar_t *);
 extern "C" void __stdcall FinishUpgrade();
+extern "C" void __stdcall ReleaseUninstallGuards();
 extern "C" void __stdcall UpgradeError(wchar_t *, int);
 namespace fs = std::filesystem;
 HANDLE job;
@@ -108,6 +110,36 @@ void prepared(const fs::path &directory)
     }
     require(true, "upgrade prepared");
 }
+HWND button(const wchar_t *caption)
+{
+    struct Search { const wchar_t *caption; HWND found; } search{caption, nullptr};
+    EnumWindows([](HWND window, LPARAM value) -> BOOL {
+        EnumChildWindows(window, [](HWND child, LPARAM value) -> BOOL {
+            auto &search = *reinterpret_cast<Search *>(value);
+            wchar_t text[128]; GetWindowTextW(child, text, 128);
+            if (IsWindowVisible(child) && IsWindowEnabled(child) && !wcscmp(text, search.caption))
+                search.found = child;
+            return TRUE;
+        }, value);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&search));
+    return search.found;
+}
+void click(HWND window) { PostMessageW(window, BM_CLICK, 0, 0); }
+HWND dialogButton(int id)
+{
+    struct Search { int id; HWND found; } search{id, nullptr};
+    EnumWindows([](HWND window, LPARAM value) -> BOOL {
+        auto &search = *reinterpret_cast<Search *>(value);
+        wchar_t name[32]; GetClassNameW(window, name, 32);
+        if (IsWindowVisible(window) && !wcscmp(name, L"#32770")) {
+            HWND button = GetDlgItem(window, search.id);
+            if (button && IsWindowEnabled(button)) search.found = button;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&search));
+    return search.found;
+}
 int wmain(int argc, wchar_t **argv)
 {
     if (argc > 1 && (std::wstring(argv[1]) == L"--child" || std::wstring(argv[1]) == L"run")) {
@@ -150,7 +182,114 @@ int wmain(int argc, wchar_t **argv)
                 "cleanup job configured");
         const std::wstring mode = argv[1];
         const bool setupMode = mode == L"--setup" || mode == L"--setup-locked";
-        if (mode == L"--old" || mode == L"--new" || setupMode) {
+        if (mode == L"--handle-test") {
+            fs::create_directories(root);
+            const auto unins = root / L"unins000.exe";
+            const auto replacement = root / L"replacement.tmp";
+            std::ofstream(unins) << "original";
+            std::ofstream(replacement) << "replacement";
+            std::ofstream(root / L"unins000.dat") << "uninstall log";
+            std::ofstream(root / L"test.dll") << "application DLL";
+            for (DWORD sharing : {DWORD(FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                                  DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)}) {
+                HANDLE file = CreateFileW(unins.c_str(), GENERIC_WRITE, sharing,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                require(file != INVALID_HANDLE_VALUE, "baseline-style uninstall guard acquired");
+                const BOOL moved = MoveFileExW(replacement.c_str(), unins.c_str(), MOVEFILE_REPLACE_EXISTING);
+                const DWORD error = GetLastError();
+                std::cout << "MoveFileEx with GENERIC_WRITE sharing=" << sharing << " error=" << error << std::endl;
+                require(!moved && error == ERROR_ACCESS_DENIED, "held write handle reproduces MoveFileEx code 5 without another process");
+                CloseHandle(file);
+            }
+            require(MoveFileExW(replacement.c_str(), unins.c_str(), MOVEFILE_REPLACE_EXISTING),
+                    "closing the responsible handle restores replacement");
+            prepared(root);
+            ReleaseUninstallGuards();
+            HANDLE uninstaller = CreateFileW(unins.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+                0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            require(uninstaller != INVALID_HANDLE_VALUE, "Inno files handed back before installation");
+            CloseHandle(uninstaller);
+            HANDLE dll = CreateFileW((root / L"test.dll").c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            require(dll == INVALID_HANDLE_VALUE, "application DLL guard survives uninstall handoff");
+            require(fs::exists(root / L".oneproxy-upgrading"), "upgrade marker survives uninstall handoff");
+            FinishUpgrade();
+        } else if (mode.find(L"--uninstall-") == 0) {
+            require(argc == 4, "isolated setup supplied");
+            const auto file = root / (mode == L"--uninstall-dat" ? L"unins000.dat" : L"unins000.exe");
+            HANDLE locked = INVALID_HANDLE_VALUE;
+            PROCESS_INFORMATION uninstaller = {};
+            if (mode == L"--uninstall-running") {
+                uninstaller = spawn(file, L"", root / L"profile");
+                Sleep(2000); // Let Inno's temporary second phase reach its confirmation dialog.
+                require(WaitForSingleObject(uninstaller.hProcess, 0) == WAIT_TIMEOUT,
+                        "real uninstaller remains active before confirmation");
+            } else if (mode == L"--uninstall-readonly") {
+                require(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_READONLY), "read-only uninstall fixture set");
+            } else if (mode != L"--uninstall-permission" && mode != L"--uninstall-late") {
+                locked = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                require(locked != INVALID_HANDLE_VALUE, "external uninstall file lock held");
+            }
+            const bool interactive = mode == L"--uninstall-retry" || mode == L"--uninstall-cancel";
+            auto setup = spawn(fs::absolute(argv[3]), (interactive ? L"" : std::wstring(L"/VERYSILENT /SUPPRESSMSGBOXES ")) + L"/NORESTART /SP- /DIR=\"" +
+                root.wstring() + L"\" /LOG=\"" + (root / (mode + L".log")).wstring() + L"\"", root / L"profile");
+            bool retried = false;
+            if (mode == L"--uninstall-late") {
+                const auto deadline = GetTickCount64() + 30000;
+                while (GetTickCount64() < deadline && WaitForSingleObject(setup.hProcess, 0) == WAIT_TIMEOUT) {
+                    std::ifstream stream(root / (mode + L".log"), std::ios::binary);
+                    std::string log((std::istreambuf_iterator<char>(stream)), {});
+                    log.erase(std::remove(log.begin(), log.end(), '\0'), log.end());
+                    if (log.find("Starting the installation process.") != std::string::npos) {
+                        locked = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                        if (locked != INVALID_HANDLE_VALUE) break;
+                    }
+                    Sleep(1);
+                }
+                require(locked != INVALID_HANDLE_VALUE, "late external EXE lock acquired after preparation handoff");
+            }
+            if (interactive) {
+                const auto deadline = GetTickCount64() + 90000;
+                while (WaitForSingleObject(setup.hProcess, 100) == WAIT_TIMEOUT && GetTickCount64() < deadline) {
+                    if (HWND yes = dialogButton(IDYES)) click(yes);
+                    else if (HWND retry = dialogButton(IDRETRY)) {
+                        // The posted click can take more than one poll to dismiss
+                        // the modal dialog. Never click a second Retry while it closes.
+                        if (!retried) {
+                            require(true, "preparation failure reached Retry dialog");
+                            retried = true;
+                            if (mode == L"--uninstall-retry") {
+                                CloseHandle(locked); locked = INVALID_HANDLE_VALUE;
+                                click(retry);
+                            } else click(dialogButton(IDCANCEL));
+                        }
+                    } else if (retried && mode == L"--uninstall-cancel") {
+                        click(button(L"Cancel"));
+                    } else if (HWND next = button(L"&Next >")) click(next);
+                    else if (HWND next = button(L"&Next")) click(next);
+                    else if (HWND install = button(L"&Install")) click(install);
+                    else if (HWND finish = button(L"&Finish")) click(finish);
+                    else if (HWND yes = button(L"&Yes")) click(yes);
+                    Sleep(200);
+                }
+                require(retried, "interactive preparation Retry/Cancel page exercised");
+            }
+            require(WaitForSingleObject(setup.hProcess, interactive ? 0 : 120000) == WAIT_OBJECT_0, "locked uninstall setup completed");
+            DWORD code; GetExitCodeProcess(setup.hProcess, &code);
+            std::cout << "Setup exit=" << code << std::endl;
+            require(code == (mode == L"--uninstall-retry" ? 0 : mode == L"--uninstall-late" ? 5 : 7),
+                    "uninstall conflict reports expected preparation failure or retry success");
+            CloseHandle(setup.hProcess);
+            if (locked != INVALID_HANDLE_VALUE) CloseHandle(locked);
+            if (mode == L"--uninstall-readonly") SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+            if (uninstaller.hProcess) {
+                require(WaitForSingleObject(uninstaller.hProcess, 0) == WAIT_TIMEOUT,
+                        "upgrade did not terminate active uninstall transaction");
+                CloseHandle(uninstaller.hProcess);
+            }
+        } else if (mode == L"--old" || mode == L"--new" || setupMode) {
             auto process = spawn(root / L"oneproxy-tray.exe", L"", root / L"profile");
             HANDLE child = waitChild(process.dwProcessId);
             require(trayThread(process.dwProcessId) != 0, "real Qt message-only window discovered");

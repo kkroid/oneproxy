@@ -10,11 +10,13 @@
 #ifdef _M_IX86
 #pragma comment(linker, "/EXPORT:PrepareUpgrade=_PrepareUpgrade@4")
 #pragma comment(linker, "/EXPORT:FinishUpgrade=_FinishUpgrade@0")
+#pragma comment(linker, "/EXPORT:ReleaseUninstallGuards=_ReleaseUninstallGuards@0")
 #pragma comment(linker, "/EXPORT:UpgradeError=_UpgradeError@8")
 #endif
 
 namespace {
 std::vector<HANDLE> guards;
+std::vector<HANDLE> uninstallGuards;
 std::wstring failure;
 struct Process {
     DWORD pid;
@@ -193,7 +195,17 @@ bool stop(const std::wstring &root)
     closeProcesses(children); closeProcesses(parents);
     return ok;
 }
-bool guardBinaries(const std::wstring &directory)
+bool uninstallFile(const std::wstring &name)
+{
+    // Inno owns these root-level files, not the application payload.
+    return name.size() == 12 && equal(name.substr(0, 5), L"unins") &&
+        name[5] >= L'0' && name[5] <= L'9' &&
+        name[6] >= L'0' && name[6] <= L'9' &&
+        name[7] >= L'0' && name[7] <= L'9' &&
+        (equal(name.substr(8), L".exe") || equal(name.substr(8), L".dat") ||
+         equal(name.substr(8), L".msg"));
+}
+bool guardBinaries(const std::wstring &directory, bool root = true)
 {
     WIN32_FIND_DATAW entry;
     HANDLE search = FindFirstFileW((directory + L"\\*").c_str(), &entry);
@@ -206,8 +218,20 @@ bool guardBinaries(const std::wstring &directory)
             ok = fail(L"Installation contains a reparse point: " + path, ERROR_NOT_SUPPORTED); break;
         }
         if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (!(ok = guardBinaries(path))) break;
+            if (!(ok = guardBinaries(path, false))) break;
         } else {
+            if (root && uninstallFile(entry.cFileName)) {
+                // Probe read/write/delete access, including DAT locks and running
+                // uninstallers. Do not terminate an uninstall transaction.
+                HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+                    0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (file == INVALID_HANDLE_VALUE) {
+                    ok = fail(L"Uninstall information is in use or not writable; close the uninstaller or release the lock: " + path);
+                    break;
+                }
+                uninstallGuards.push_back(file);
+                continue;
+            }
             const auto dot = path.find_last_of(L'.');
             if (dot == std::wstring::npos ||
                 (!equal(path.substr(dot), L".exe") && !equal(path.substr(dot), L".dll") &&
@@ -230,8 +254,14 @@ bool guardBinaries(const std::wstring &directory)
 }
 }
 
+extern "C" __declspec(dllexport) void __stdcall ReleaseUninstallGuards()
+{
+    for (auto handle : uninstallGuards) CloseHandle(handle);
+    uninstallGuards.clear();
+}
 extern "C" __declspec(dllexport) void __stdcall FinishUpgrade()
 {
+    ReleaseUninstallGuards();
     for (auto handle : guards) CloseHandle(handle);
     guards.clear();
 }
