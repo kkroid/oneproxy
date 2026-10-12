@@ -33,6 +33,7 @@ typedef char* (*PFN_StartAtEpoch)(char*, unsigned long long);
 typedef char* (*PFN_Stop)();
 typedef char* (*PFN_Restart)();
 typedef char* (*PFN_Status)();
+typedef char* (*PFN_GetVersion)();
 typedef char* (*PFN_Check)();
 typedef char* (*PFN_Flush)();
 typedef char* (*PFN_Select)(char*);
@@ -46,6 +47,7 @@ static PFN_StartAtEpoch pStartAtEpoch;
 static PFN_Stop   pStop;
 static PFN_Restart pRestart;
 static PFN_Status pStatus;
+static PFN_GetVersion pGetVersion;
 static PFN_Check  pCheck;
 static PFN_Flush  pFlush;
 static PFN_Select pSelect;
@@ -70,9 +72,10 @@ bool loadDLL() {
     L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
     L(pSelect,"OneProxy_SelectProxy"); L(pImport,"OneProxy_ImportSubscription");
     L(pUpdateSubscription,"OneProxy_UpdateSubscription"); L(pFree,"OneProxy_FreeString");
+    L(pGetVersion,"OneProxy_GetVersion");
     #undef L
     const bool resolved = pStartupEpoch && pStartAtEpoch && pStart && pStop && pRestart && pStatus && pCheck &&
-                          pFlush && pSelect && pImport && pUpdateSubscription && pFree;
+                          pFlush && pSelect && pImport && pUpdateSubscription && pFree && pGetVersion;
     if (!resolved) {
         qCritical() << "Shared library exports are incomplete";
         library.unload();
@@ -219,7 +222,7 @@ private:
         menu->clear();
 
         // Status — always at top
-        menu->addAction(running ? s.running : s.stopped)->setEnabled(false);
+        menu->addAction(QStringLiteral("v%1 · %2").arg(callFree(pGetVersion()), running ? s.running : s.stopped))->setEnabled(false);
         if (!subscriptionStatus.text.isEmpty()) {
             menu->addAction(subscriptionStatus.text)->setEnabled(false);
         }
