@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QFileInfo>
 #include <QImageReader>
 #include <QDir>
 #include <QClipboard>
@@ -463,6 +464,11 @@ private:
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    // Also covers --self-check, before loading the Go core during replacement.
+    if (QFileInfo::exists(QCoreApplication::applicationDirPath() + "/.oneproxy-upgrading")) {
+        qWarning() << "OneProxy is being upgraded. Wait for Setup to finish.";
+        return 1;
+    }
     app.setQuitOnLastWindowClosed(false);
     app.setOrganizationName(QStringLiteral("OneProxy"));
     app.setApplicationName(QStringLiteral("OneProxyTray"));

@@ -31,9 +31,10 @@ $ErrorActionPreference = 'Stop'
 $targets = @(
     (Join-Path $BuildDir 'oneproxy-tray.exe'),
     (Join-Path $BuildDir 'oneproxy.dll'),
+    (Join-Path $BuildDir 'oneproxy-upgrade.dll'),
     $Installer
 )
-if ($PrePackage) { $targets = @($targets | Select-Object -First 2) }
+if ($PrePackage) { $targets = @($targets | Select-Object -First 3) }
 if ($Uninstaller) { $targets += $Uninstaller }
 $targets = @($targets | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_) })
 

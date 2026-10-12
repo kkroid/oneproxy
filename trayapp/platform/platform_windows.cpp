@@ -21,6 +21,10 @@ QSystemTrayIcon *trayIcon = nullptr;
 
 LRESULT CALLBACK trayWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == RegisterWindowMessageW(L"OneProxy.UpgradeQuit.v1")) {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
+        return 1;
+    }
     if (message == taskbarCreatedMessage && trayIcon) {
         trayIcon->hide();
         trayIcon->show();
@@ -95,8 +99,9 @@ void initializeTrayRecovery(QSystemTrayIcon *tray)
     windowClass.lpszClassName = L"OneProxyTrayWindow";
     RegisterClassExW(&windowClass);
 
-    CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
+    HWND window = CreateWindowExW(0, L"OneProxyTrayWindow", L"", 0, 0, 0, 0, 0,
                     HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (window) SetPropW(window, L"OneProxy.UpgradeQuit.v1", reinterpret_cast<HANDLE>(1));
 }
 
 } // namespace Platform

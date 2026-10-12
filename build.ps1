@@ -90,6 +90,8 @@ if ($Clean) {
 
 $qtDir = Resolve-QtDir
 $vcvars = Resolve-VcVars
+$vcvars32 = Join-Path (Split-Path $vcvars) 'vcvars32.bat'
+if ($Installer -and -not (Test-Path $vcvars32)) { throw "x86 compiler environment not found: $vcvars32" }
 $innoSetup = if ($Installer) { Resolve-InnoSetup } else { $null }
 
 $singBox = "$root\bin\sing-box.exe"
@@ -227,6 +229,20 @@ if ($missing.Count -gt 0) {
 }
 
 if ($Installer) {
+    # Inno Setup's Pascal host is 32-bit even for an x64 application payload.
+    # Use the static CRT so the temporary helper needs no installed runtime.
+    $upgradeBat = Join-Path $buildDir 'build-upgrade-helper.bat'
+    Set-Content -LiteralPath $upgradeBat -Encoding ASCII @"
+@echo off
+call "$vcvars32" >nul 2>&1
+if %ERRORLEVEL% neq 0 exit /b 1
+cd /d "$buildDir"
+cl /nologo /std:c++17 /EHsc /MT /O2 /LD "$root\trayapp\platform\upgrade_windows.cpp" /Fe:oneproxy-upgrade.dll /link user32.lib
+exit /b %ERRORLEVEL%
+"@
+    & cmd.exe /c $upgradeBat
+    if ($LASTEXITCODE -ne 0) { throw 'Upgrade helper build failed' }
+    Remove-Item -LiteralPath $upgradeBat
     $signScript = Join-Path $root 'scripts\sign-windows.ps1'
     if ($Sign -or $SigningDryRun) {
         $signArgs = @('-NoProfile','-File',$signScript,'-PrePackage')

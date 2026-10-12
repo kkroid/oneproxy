@@ -60,7 +60,7 @@ foreach ($relative in $ownedPaths) {
 }
 # Match the installer's payload locations, not CMake's recursive build tree.
 $payloadRoot = Join-Path $Root 'trayapp/build'
-$rootPatterns = @('oneproxy-tray.exe', 'oneproxy.exe', 'oneproxy.dll', 'dxcompiler.dll', 'dxil.dll', 'vcruntime140*.dll', 'msvcp140*.dll',
+$rootPatterns = @('oneproxy-tray.exe', 'oneproxy.exe', 'oneproxy.dll', 'oneproxy-upgrade.dll', 'dxcompiler.dll', 'dxil.dll', 'vcruntime140*.dll', 'msvcp140*.dll',
     'concrt140.dll', 'vccorlib140.dll', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll',
     'Qt6Network.dll', 'Qt6Svg.dll', 'green.ico', 'yellow.ico', 'red.ico')
 $payloadFiles = @(foreach ($pattern in $rootPatterns) {

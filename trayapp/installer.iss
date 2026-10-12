@@ -26,6 +26,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 MinVersion=10.0.10240
 PrivilegesRequired=admin
+; Our directory-scoped shutdown owns this lifecycle; do not let Restart Manager
+; close unrelated applications or schedule replacement of running DLLs on reboot.
+CloseApplications=no
+RestartApplications=no
+AllowCancelDuringInstall=no
 ; Enabled only for explicit signed builds via ISCC /DSignToolCommand.
 ; The command is supplied as /Soneproxy-sign=<command>.
 #ifdef SignToolCommand
@@ -37,6 +42,7 @@ SignedUninstaller=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
+Source: "oneproxy-upgrade.dll"; Flags: dontcopy
 ; Main executable and core DLL
 Source: "oneproxy-tray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "oneproxy.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -119,14 +125,48 @@ begin
   end;
 end;
 
-function FindWindowEx(Parent, ChildAfter: HWND; ClassName, WindowName: String): HWND;
-  external 'FindWindowExW@user32.dll stdcall';
+function PrepareUpgrade(Directory: String): Integer;
+  external 'PrepareUpgrade@files:oneproxy-upgrade.dll stdcall';
+procedure FinishUpgrade();
+  external 'FinishUpgrade@files:oneproxy-upgrade.dll stdcall';
+procedure UpgradeError(Buffer: String; Count: Integer);
+  external 'UpgradeError@files:oneproxy-upgrade.dll stdcall';
 
-function InitializeSetup(): Boolean;
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Detail: String;
 begin
-  { Both legacy and current trays expose this message-only window. Do not
-    overwrite a running installation or start a second copy elsewhere. }
-  Result := FindWindowEx(HWND(-3), 0, 'OneProxyTrayWindow', '') = 0;
-  if not Result then
-    SuppressibleMsgBox('OneProxy is running. Exit OneProxy from its tray menu, then run Setup again. Your proxy connection will stop while upgrading.', mbError, MB_OK, IDOK);
+  Result := '';
+  if not ForceDirectories(ExpandConstant('{app}')) then
+  begin
+    Result := 'Cannot create the installation directory. Check permissions and retry, or cancel Setup.';
+    Exit;
+  end;
+  if PrepareUpgrade(ExpandConstant('{app}')) = 0 then
+  begin
+    SetLength(Detail, 2048);
+    UpgradeError(Detail, 2048);
+    Detail := Copy(Detail, 1, Pos(#0, Detail) - 1);
+    Log(Detail);
+    Result := 'OneProxy could not be stopped safely. ' + Detail + #13#10 +
+      'No application files have been replaced. Resolve the reported problem and click Retry, or cancel Setup.';
+  end;
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo + NewLine + NewLine +
+    'Setup will close OneProxy in this installation directory. Your proxy connection will be briefly interrupted. Your configuration and subscriptions will be kept.';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { Release before the optional post-install launch. }
+  if CurStep = ssPostInstall then FinishUpgrade();
+end;
+
+procedure DeinitializeSetup();
+begin
+  FinishUpgrade();
 end;
