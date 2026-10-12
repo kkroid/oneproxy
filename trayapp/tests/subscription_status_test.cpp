@@ -26,8 +26,13 @@ private slots:
         QVERIFY(view.notifyFailure);
         status["running"] = false;
         view.update(status);
-        QVERIFY(view.text.isEmpty());
+        QVERIFY(view.text.contains("not connected"));
+        QVERIFY(view.text.contains("Start again"));
         QVERIFY(!view.notifyFailure);
+        status["subscription_updating"] = true;
+        view.update(status);
+        QVERIFY(view.text.contains("before connection"));
+        status["subscription_updating"] = false;
         status["running"] = true;
         status["subscription_configured"] = false;
         view.update(status);

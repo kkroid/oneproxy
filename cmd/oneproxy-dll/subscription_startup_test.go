@@ -39,15 +39,10 @@ func isolatedSubscriptionState(t *testing.T) {
 	})
 }
 
-func TestSubscriptionStartupRefreshIsImmediateAndAsync(t *testing.T) {
-	entered, release := make(chan struct{}, 2), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		entered <- struct{}{}
-		<-release
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
+func TestSubscriptionPeriodicUpdaterDoesNotRefreshImmediately(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { entered <- struct{}{} }))
 	defer server.Close()
-	defer close(release)
 	isolatedSubscriptionState(t)
 	gMu.Lock()
 	gConfig = &config.Config{SubscriptionURL: server.URL}
@@ -55,29 +50,24 @@ func TestSubscriptionStartupRefreshIsImmediateAndAsync(t *testing.T) {
 	first := subscriptionActive
 	startSubscriptionUpdater()
 	if subscriptionActive != first {
-		t.Error("duplicate updater replaced active session")
+		t.Fatal("duplicate updater")
 	}
 	gMu.Unlock()
-	awaitSubscription(t, entered)
-	gMu.Lock()
-	if !subscriptionUpdating {
-		t.Error("in-flight request is not visible")
-	}
-	stopSubscriptionUpdater()
-	gMu.Unlock()
-	// The updater must finish while the HTTP handler is still blocked.
-	awaitSubscription(t, first.done)
 	select {
 	case <-entered:
-		t.Fatal("duplicate request from repeated startup")
-	default:
+		t.Fatal("startup performed duplicate refresh")
+	case <-time.After(100 * time.Millisecond):
 	}
+	gMu.Lock()
+	stopSubscriptionUpdater()
+	gMu.Unlock()
+	awaitSubscription(t, first.done)
 	if subscriptionInterval != 6*time.Hour {
 		t.Fatal("periodic interval changed")
 	}
 }
 
-func TestSubscriptionStopAndReplacementRejectLateFailure(t *testing.T) {
+func TestPeriodicSessionStopRejectsLateFailure(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
@@ -92,6 +82,8 @@ func TestSubscriptionStopAndReplacementRejectLateFailure(t *testing.T) {
 	startSubscriptionUpdater()
 	previous := subscriptionActive
 	gMu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- updateConfiguredSubscriptionForSession(previous.stop) }()
 	awaitSubscription(t, entered)
 	gMu.Lock()
 	stopSubscriptionUpdater()
@@ -101,10 +93,18 @@ func TestSubscriptionStopAndReplacementRejectLateFailure(t *testing.T) {
 	current := subscriptionActive
 	gMu.Unlock()
 	awaitSubscription(t, previous.done)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stopped update succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopped update stuck")
+	}
 	gMu.Lock()
 	defer gMu.Unlock()
 	if subscriptionActive != current || gConfig != replacement || subscriptionUpdating || subscriptionLastErr != "" || !subscriptionLastAt.IsZero() {
-		t.Fatal("stopped session polluted replacement status/config")
+		t.Fatal("stopped periodic session polluted replacement")
 	}
 }
 

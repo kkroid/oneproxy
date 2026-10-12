@@ -38,7 +38,6 @@ func startSubscriptionUpdater() {
 	subscriptionActive = session
 	go func() {
 		defer close(session.done)
-		_ = updateConfiguredSubscriptionForSession(session.stop)
 		ticker := time.NewTicker(subscriptionInterval)
 		defer ticker.Stop()
 		for {
@@ -90,6 +89,9 @@ func updateSubscription(url string, allowSourceChange bool) error {
 // Called with gMu held; drops it for queuing and download, returns with it held.
 // Capture identity BEFORE queuing so an old caller cannot adopt a new session.
 func updateSubscriptionLocked(url string, allowSourceChange bool) error {
+	if gStartup != nil {
+		return fmt.Errorf("startup in progress; try again after startup")
+	}
 	current, session := gConfig, subscriptionActive
 	if current == nil {
 		return fmt.Errorf("not started")

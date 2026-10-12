@@ -5,6 +5,7 @@ package main
 */
 import "C"
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,7 +29,14 @@ var (
 	gConfig        *config.Config
 	gLogger        *logger.Logger
 	gMu            sync.Mutex
+	gStartup       *startupSession
+	gConfigPath    string
+	gStartEpoch    uint64
 )
+
+type startupSession struct {
+	cancel context.CancelFunc
+}
 
 // ---- helpers ----
 
@@ -76,12 +84,39 @@ func OneProxy_Start(configPath *C.char) *C.char {
 	return errStr(startProxy(C.GoString(configPath)))
 }
 
+// OneProxy_StartupEpoch must be called before dispatching asynchronous Start.
+// Stop invalidates queued calls as well as canceling an active download.
+//export OneProxy_StartupEpoch
+func OneProxy_StartupEpoch() C.ulonglong {
+	gMu.Lock()
+	defer gMu.Unlock()
+	return C.ulonglong(gStartEpoch)
+}
+
+//export OneProxy_StartAtEpoch
+func OneProxy_StartAtEpoch(configPath *C.char, epoch C.ulonglong) *C.char {
+	gMu.Lock()
+	defer gMu.Unlock()
+	return errStr(startProxyAtEpoch(C.GoString(configPath), uint64(epoch)))
+}
+
+// Requires gMu: the epoch check and startup registration are one operation.
+func startProxyAtEpoch(cp string, epoch uint64) error {
+	if epoch != gStartEpoch {
+		return fmt.Errorf("startup canceled; not connected")
+	}
+	return startProxy(cp)
+}
+
 // startProxy requires gMu. Dispose the previous session before replacing globals.
 func startProxy(cp string) error {
 	return startProxyInDataDir(cp, resolveDataDir())
 }
 
 func startProxyInDataDir(cp, dataDir string) error {
+	if gStartup != nil {
+		return fmt.Errorf("startup already in progress")
+	}
 	if gManager != nil && gManager.IsRunning() {
 		return fmt.Errorf("already running")
 	}
@@ -102,6 +137,9 @@ func startProxyInDataDir(cp, dataDir string) error {
 		placeholder := filepath.Join(resourceDir(exeDir()), "config-placeholder.json")
 		target := filepath.Join(dataDir, "config.json")
 		if src, e := os.ReadFile(placeholder); e == nil {
+			if e := os.MkdirAll(dataDir, 0755); e != nil {
+				return fmt.Errorf("prepare data directory: %w", e)
+			}
 			if e := os.WriteFile(target, src, 0644); e == nil {
 				found = target
 				err = nil
@@ -112,9 +150,37 @@ func startProxyInDataDir(cp, dataDir string) error {
 		}
 	}
 
+	gConfigPath = found
 	cfg, err := config.Load(found)
 	if err != nil {
 		return err
+	}
+
+	if cfg.SubscriptionURL != "" {
+		ctx, cancel := context.WithCancel(context.Background())
+		session := &startupSession{cancel: cancel}
+		gStartup = session
+		gConfig = cfg
+		subscriptionUpdating = true
+		gMu.Unlock()
+		next, updateErr := config.PrepareStartupSubscription(ctx, cfg)
+		gMu.Lock()
+		cancel()
+		if gStartup != session {
+			return fmt.Errorf("startup canceled; not connected")
+		}
+		gStartup = nil
+		subscriptionUpdating = false
+		if updateErr == nil {
+			updateErr = next.Save(found)
+		}
+		if updateErr != nil {
+			setSubscriptionUpdateError()
+			subscriptionLastErr = config.StartupSubscriptionError
+			return fmt.Errorf("%s", subscriptionLastErr)
+		}
+		cfg = next
+		setSubscriptionUpdateSuccess()
 	}
 
 	if routeMode := loadRouteModeOverride(); routeMode != "" {
@@ -220,6 +286,16 @@ func watchManagerLifecycle(manager *proxy.Manager, checker *proxy.HealthChecker)
 func OneProxy_Stop() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
+	return errStr(stopProxy())
+}
+
+// Requires gMu, including when called by Restart.
+func stopProxy() error {
+	gStartEpoch++
+	if gStartup != nil {
+		gStartup.cancel()
+		gStartup = nil
+	}
 	stopSubscriptionUpdater()
 	if gLogger != nil {
 		gLogger.Info("stopping")
@@ -232,7 +308,7 @@ func OneProxy_Stop() *C.char {
 		stopErr = gManager.Stop()
 	}
 	if stopErr != nil {
-		return errStr(stopErr)
+		return stopErr
 	}
 	gManager, gHealthChecker, gDNSFlusher, gConfig = nil, nil, nil, nil
 	if gLogger != nil {
@@ -245,25 +321,17 @@ func OneProxy_Stop() *C.char {
 func OneProxy_Restart() *C.char {
 	gMu.Lock()
 	defer gMu.Unlock()
+	if gStartup != nil {
+		return errStr(fmt.Errorf("startup already in progress"))
+	}
 	if gManager == nil {
 		return errStr(fmt.Errorf("not started"))
 	}
-	if gLogger != nil {
-		gLogger.Info("restarting")
-	}
-	if gHealthChecker != nil {
-		gHealthChecker.Stop()
-	}
-	if err := gManager.Restart(); err != nil {
+	cp := gConfigPath
+	if err := stopProxy(); err != nil {
 		return errStr(err)
 	}
-	if gConfig != nil && gConfig.HealthCheck.Enabled && gHealthChecker != nil {
-		gHealthChecker.Start()
-	}
-	if gLogger != nil {
-		gLogger.Info("restarted")
-	}
-	return nil
+	return errStr(startProxy(cp))
 }
 
 type statusOut struct {
@@ -306,7 +374,7 @@ func OneProxy_Status() *C.char {
 	if configSnapshot != nil {
 		out.UnifiedPort = configSnapshot.Unified.Port
 		out.SubscriptionConfigured = configSnapshot.SubscriptionURL != ""
-		if out.Running && out.SubscriptionConfigured {
+		if out.SubscriptionConfigured {
 			out.SubscriptionUpdating = updating
 			out.SubscriptionLastError = lastError
 			out.SubscriptionResultID = resultID
@@ -410,6 +478,13 @@ func OneProxy_ImportSubscription(input *C.char) *C.char {
 }
 
 func importManualProxy(proxyConfig config.ProxyConfig) error {
+	gMu.Lock()
+	current, session := gConfig, subscriptionActive
+	if gStartup != nil {
+		gMu.Unlock()
+		return fmt.Errorf("startup in progress; try again after startup")
+	}
+	gMu.Unlock()
 	subscriptionUpdateMu.Lock()
 	defer subscriptionUpdateMu.Unlock()
 	gMu.Lock()
@@ -417,7 +492,12 @@ func importManualProxy(proxyConfig config.ProxyConfig) error {
 	if gConfig == nil {
 		return fmt.Errorf("not started")
 	}
-	current := gConfig
+	if gStartup != nil {
+		return fmt.Errorf("startup in progress; try again after startup")
+	}
+	if gConfig != current || subscriptionActive != session {
+		return fmt.Errorf("subscription session changed while importing")
+	}
 	next, err := config.MergeManualProxy(current, proxyConfig)
 	if err != nil {
 		return err

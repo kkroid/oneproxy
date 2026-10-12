@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,8 +16,17 @@ import (
 // FetchSubscription downloads and parses a subscription URL (JMS/v2ray format).
 // Returns full list of proxies with auto-assigned names and local ports.
 func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, error) {
+	return FetchSubscriptionContext(context.Background(), subURL, startPort)
+}
+
+// FetchSubscriptionContext preserves the default transport and bounds downloads.
+func FetchSubscriptionContext(ctx context.Context, subURL string, startPort int) ([]ProxyConfig, string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(subURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("subscription request failed")
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("subscription request failed")
 	}
@@ -26,11 +36,14 @@ func FetchSubscription(subURL string, startPort int) ([]ProxyConfig, string, err
 		return nil, "", fmt.Errorf("subscription server returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("read subscription body: %w", err)
 	}
 
+	if len(body) > 1<<20 {
+		return nil, "", fmt.Errorf("subscription exceeds size limit")
+	}
 	raw := strings.TrimSpace(string(body))
 	decoded, err := decodeSubscriptionBase64(raw)
 	if err != nil {

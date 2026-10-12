@@ -27,6 +27,8 @@
 
 // ─── DLL bindings ──────────────────────────────────
 typedef char* (*PFN_Start)(char*);
+typedef unsigned long long (*PFN_StartupEpoch)();
+typedef char* (*PFN_StartAtEpoch)(char*, unsigned long long);
 typedef char* (*PFN_Stop)();
 typedef char* (*PFN_Restart)();
 typedef char* (*PFN_Status)();
@@ -38,6 +40,8 @@ typedef char* (*PFN_UpdateSubscription)();
 typedef void  (*PFN_Free)(char*);
 
 static PFN_Start  pStart;
+static PFN_StartupEpoch pStartupEpoch;
+static PFN_StartAtEpoch pStartAtEpoch;
 static PFN_Stop   pStop;
 static PFN_Restart pRestart;
 static PFN_Status pStatus;
@@ -60,12 +64,13 @@ bool loadDLL() {
     }
 
     #define L(fn,n) fn = reinterpret_cast<decltype(fn)>(library.resolve(n))
+    L(pStartupEpoch,"OneProxy_StartupEpoch"); L(pStartAtEpoch,"OneProxy_StartAtEpoch");
     L(pStart,"OneProxy_Start"); L(pStop,"OneProxy_Stop"); L(pRestart,"OneProxy_Restart");
     L(pStatus,"OneProxy_Status"); L(pCheck,"OneProxy_HealthCheck"); L(pFlush,"OneProxy_FlushDNS");
     L(pSelect,"OneProxy_SelectProxy"); L(pImport,"OneProxy_ImportSubscription");
     L(pUpdateSubscription,"OneProxy_UpdateSubscription"); L(pFree,"OneProxy_FreeString");
     #undef L
-    const bool resolved = pStart && pStop && pRestart && pStatus && pCheck &&
+    const bool resolved = pStartupEpoch && pStartAtEpoch && pStart && pStop && pRestart && pStatus && pCheck &&
                           pFlush && pSelect && pImport && pUpdateSubscription && pFree;
     if (!resolved) {
         qCritical() << "Shared library exports are incomplete";
@@ -118,6 +123,14 @@ static bool requiredResourcesAvailable() {
 class OneProxyTray : public QObject {
     Q_OBJECT
 public:
+    QString stopStartupWorker() {
+        ++startupGeneration;
+        auto error = callFree(pStop());
+        if (startupThread.joinable()) startupThread.join();
+        starting = false;
+        return error;
+    }
+
     QSystemTrayIcon *tray;
     QMenu *menu;
     QTimer timer;
@@ -143,20 +156,11 @@ public:
 private:
     SubscriptionStatus subscriptionStatus;
 
-    void autoStart() {
-        auto err = callFree(pStart((char*)"config.json"));
-        if (!err.isEmpty()) {
-            qDebug() << "Start failed:" << err;
-            tray->showMessage("OneProxy", "Start failed: " + err, QSystemTrayIcon::Critical, 5000);
-            tick();
-            return;
-        }
-        qDebug() << "OneProxy: started";
-        // Give sing-box 3s to bind, then health-check off-thread and refresh.
-        QTimer::singleShot(3000, this, [this]() {
-            runAsync([]() { callFree(pCheck()); }, 8000);
-        });
-    }
+    std::thread startupThread;
+    bool starting = false;
+    unsigned startupGeneration = 0;
+
+    void autoStart() { if (startupGeneration == 0) doStart(); }
 
     // Parse status JSON; returns false if unavailable.
     bool fetchStatus(bool &running, int &unifiedPort, QJsonArray &proxies,
@@ -279,9 +283,9 @@ private:
         }
         menu->addSeparator();
 
-        if (running) {
+        if (running || starting) {
             menu->addAction(s.stop, this, &OneProxyTray::doStop);
-            menu->addAction(s.restart, this, &OneProxyTray::doRestart);
+            menu->addAction(s.restart, this, &OneProxyTray::doRestart)->setEnabled(!starting);
         } else {
             menu->addAction(s.start, this, &OneProxyTray::doStart);
         }
@@ -292,7 +296,7 @@ private:
 
         // Routing mode submenu
         auto *routeMenu = menu->addMenu(s.routingMode);
-        routeMenu->setEnabled(Platform::routingModeSupported());
+        routeMenu->setEnabled(!starting && Platform::routingModeSupported());
         auto *routeGroup = new QActionGroup(this);
         routeGroup->setExclusive(true);
 
@@ -321,7 +325,7 @@ private:
 
         menu->addSeparator();
         menu->addAction(s.openConfig, this, [this]() { doOpenConfig(); });
-        menu->addAction(s.importClipboard, this, &OneProxyTray::doImportClipboard);
+        menu->addAction(s.importClipboard, this, &OneProxyTray::doImportClipboard)->setEnabled(!starting);
         auto statusJson = QJsonDocument::fromJson(callFree(pStatus()).toUtf8()).object();
         auto *updateSubscription = menu->addAction(s.updateSubscription, this, &OneProxyTray::doUpdateSubscription);
         updateSubscription->setEnabled(statusJson["running"].toBool() &&
@@ -355,18 +359,36 @@ private:
                           QSystemTrayIcon::Critical, 6000);
     }
 
-    void doStart()    { showError("Start failed", callFree(pStart((char*)"config.json"))); tick(); }
-    void doStop()     { showError("Stop failed", callFree(pStop())); tick(); }
-    void doRestart()  {
-        auto error = callFree(pRestart());
-        if (!error.isEmpty()) {
-            showError("Restart failed", error);
-            tick();
-            return;
-        }
-        QTimer::singleShot(3000, this, [this]() {
-            runAsync([]() { callFree(pCheck()); }, 8000);
+    void doStart() {
+        if (starting) return;
+        if (startupThread.joinable()) startupThread.join();
+        starting = true;
+        const unsigned generation = ++startupGeneration;
+        // Capture on the UI thread before dispatch. DLL Stop invalidates this
+        // epoch under the same lock used to register the eventual Start.
+        const auto epoch = pStartupEpoch();
+        startupThread = std::thread([this, generation, epoch]() {
+            const auto error = callFree(pStartAtEpoch((char*)"config.json", epoch));
+            QMetaObject::invokeMethod(this, [this, generation, error]() {
+                if (generation != startupGeneration) return;
+                starting = false;
+                showError("Start failed", error);
+                tick();
+                if (error.isEmpty()) {
+                    QTimer::singleShot(3000, this, [this]() {
+                        runAsync([]() { callFree(pCheck()); }, 8000);
+                    });
+                }
+            }, Qt::QueuedConnection);
         });
+    }
+    void doStop() {
+        showError("Stop failed", stopStartupWorker());
+        tick();
+    }
+    void doRestart() {
+        doStop();
+        doStart();
     }
     void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
     void doFlush()    { showError("DNS flush failed", callFree(pFlush())); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
@@ -479,7 +501,7 @@ int main(int argc, char *argv[]) {
     auto *t = new OneProxyTray;
     Platform::initializeTrayRecovery(t->tray);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, t, [t]() {
-        auto error = callFree(pStop());
+        auto error = t->stopStartupWorker();
         if (!error.isEmpty()) {
             qWarning() << "Stop failed during quit:" << error;
         }

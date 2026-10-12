@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -78,6 +79,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return runtimeError(stderr, "load config", err)
 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	cfg, err = prepareCLIStartup(ctx, cfg, paths.configPath)
+	if err != nil {
+		return runtimeError(stderr, "startup", err)
+	}
 	if err := ensurePrivateDir(paths.stateDir); err != nil {
 		return runtimeError(stderr, "prepare state directory", err)
 	}
@@ -98,9 +105,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Automatic DNS flush disabled: all-down checks do not establish a local DNS cache failure.")
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	if ctx.Err() != nil {
+		return runtimeError(stderr, "startup", fmt.Errorf("startup canceled; not connected"))
+	}
 
 	fmt.Fprintln(stdout, "Starting proxy...")
 	if err := manager.Start(); err != nil {
@@ -120,7 +127,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	select {
-	case <-sigCh:
+	case <-ctx.Done():
 		close(statusStop)
 		healthChecker.Stop()
 		fmt.Fprintln(stdout, "Shutting down...")
@@ -227,4 +234,21 @@ func printStatus(hc *proxy.HealthChecker, stdout io.Writer) {
 func runtimeError(stderr io.Writer, action string, err error) int {
 	fmt.Fprintf(stderr, "oneproxy: %s: %v\n", action, err)
 	return 1
+}
+
+func prepareCLIStartup(ctx context.Context, cfg *config.Config, path string) (*config.Config, error) {
+	if cfg.SubscriptionURL == "" {
+		return cfg, nil
+	}
+	next, err := config.PrepareStartupSubscription(ctx, cfg)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		err = next.Save(path)
+	}
+	if err != nil {
+		return nil, errors.New(config.StartupSubscriptionError)
+	}
+	return next, nil
 }
