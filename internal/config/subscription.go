@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -133,9 +134,20 @@ func parseVLESS(uri string) (ProxyConfig, error) {
 	}
 	if u.Fragment != "" {
 		px.Name = extractHostname(u.Fragment)
+		if match := confirmedVLESSRemark.FindStringSubmatch(u.Fragment); match != nil {
+			remarkPort, err := strconv.Atoi(match[2])
+			if err == nil && remarkPort == port {
+				px.Server = match[1]
+			}
+		}
 	}
 	return px, nil
 }
+
+// Only this provider's confirmed remark format names the real dial endpoint.
+// URL.Fragment is already percent-decoded; SNI remains a separate TLS field.
+var confirmedVLESSRemark = regexp.MustCompile(`^JMS-[0-9]+@(c702s[0-9]+\.portablesubmarines\.com):([0-9]+)$`)
+var confirmedVLESSDomain = regexp.MustCompile(`^c702s[0-9]+\.portablesubmarines\.com$`)
 
 // ── Fragment & name extraction ────────────────────────────────────────
 // fragment format: "JMS-123@example.com:443"

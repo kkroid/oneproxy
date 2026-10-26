@@ -129,6 +129,7 @@ func updateSubscriptionLocked(url string, allowSourceChange bool) error {
 		return setSubscriptionUpdateError()
 	}
 	if !result.Changed {
+		logSubscriptionUpdate(current, next)
 		setSubscriptionUpdateSuccess()
 		return nil
 	}
@@ -140,6 +141,7 @@ func updateSubscriptionLocked(url string, allowSourceChange bool) error {
 			return setSubscriptionUpdateError()
 		}
 		gConfig = next
+		logSubscriptionUpdate(current, next)
 		setSubscriptionUpdateSuccess()
 		return nil
 	}
@@ -163,6 +165,7 @@ func updateSubscriptionLocked(url string, allowSourceChange bool) error {
 		gLogger.Info("subscription updated: added=%d updated=%d missing=%d removed=%d",
 			result.Added, result.Updated, result.Missing, result.Removed)
 	}
+	logSubscriptionUpdate(current, next)
 	setSubscriptionUpdateSuccess()
 	return nil
 }
@@ -208,7 +211,7 @@ func restoreSubscriptionSelection(cfg *config.Config, mode, name string) {
 	outboundTag, err := selectionOutboundTag(name, cfg.Proxies)
 	if err == nil {
 		if err := restoreSelectorSelection(selectorTag, outboundTag); err != nil && gLogger != nil {
-			gLogger.Warn("could not restore manual proxy selection: %v", err)
+			gLogger.Warn("could not restore manual proxy selection")
 		}
 	}
 }
@@ -257,4 +260,12 @@ func subscriptionStatus() (bool, time.Time, string, string) {
 		resultID = strconv.FormatUint(subscriptionResultID, 10)
 	}
 	return subscriptionUpdating, subscriptionLastAt, subscriptionLastErr, resultID
+}
+
+func logSubscriptionUpdate(before, after *config.Config) {
+	if gLogger != nil {
+		for _, message := range config.SubscriptionUpdateMessages(before, after) {
+			gLogger.Info("%s", message)
+		}
+	}
 }

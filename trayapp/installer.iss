@@ -1,6 +1,6 @@
 ; OneProxy Installer Script — Inno Setup 6
 #define AppName "OneProxy"
-#define AppVersion "0.8.1"
+#define AppVersion "0.8.2"
 #define AppPublisher "OneProxy Contributors"
 #define AppURL "https://github.com/kkroid/oneproxy"
 #define AppExeName "oneproxy-tray.exe"
@@ -9,7 +9,7 @@
 AppId={{7A3F8C9E-1D2B-4A56-B789-012345ABCDEF}
 AppName={#AppName}
 AppVersion={#AppVersion}
-VersionInfoVersion=0.8.1.0
+VersionInfoVersion=0.8.2.0
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}

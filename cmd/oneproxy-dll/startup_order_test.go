@@ -29,8 +29,12 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			os.Exit(3)
 		}
-		if err := os.WriteFile(os.Getenv("ONEPROXY_STARTUP_SNAPSHOT"), append(append(saved, '\n'), generated...), 0600); err != nil {
+		snapshot := os.Getenv("ONEPROXY_STARTUP_SNAPSHOT")
+		if err := os.WriteFile(snapshot+".tmp", append(append(saved, '\n'), generated...), 0600); err != nil {
 			os.Exit(4)
+		}
+		if err := os.Rename(snapshot+".tmp", snapshot); err != nil {
+			os.Exit(5)
 		}
 		for {
 			time.Sleep(time.Second)
@@ -98,6 +102,23 @@ func installStartupHelper(t *testing.T, root, path string) string {
 	return snapshot
 }
 
+// Manager's startup observation confirms process survival, not completion of
+// this test helper's disk writes. Wait for its atomic completion signal.
+func readStartupSnapshot(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+		if !os.IsNotExist(err) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestActualStartupSavesBeforeLaunchingAndRefreshesEveryStart(t *testing.T) {
 	var requests atomic.Int32
 	var fail atomic.Bool
@@ -132,10 +153,7 @@ func TestActualStartupSavesBeforeLaunchingAndRefreshesEveryStart(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	launched, err := os.ReadFile(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	launched := readStartupSnapshot(t, snapshot)
 	if bytes.Count(launched, []byte("new.example")) != 2 {
 		t.Fatalf("saved and generated configs not both updated: %s", launched)
 	}
@@ -148,6 +166,10 @@ func TestActualStartupSavesBeforeLaunchingAndRefreshesEveryStart(t *testing.T) {
 	}
 	if requests.Load() != 2 {
 		t.Fatal("second start did not refresh exactly once")
+	}
+	logs, err := os.ReadFile(filepath.Join(root, "logs", "oneproxy.log"))
+	if err != nil || !strings.Contains(string(logs), "status=updated") || !strings.Contains(string(logs), "status=unchanged") {
+		t.Fatal("startup update result was not logged")
 	}
 	if err := OneProxy_Restart(); err != nil {
 		OneProxy_FreeString(err)
@@ -219,6 +241,10 @@ func TestActualStartupFailurePreservesFileAndNeverLaunches(t *testing.T) {
 			if gManager != nil || gConfig.Proxies[0].Server != "old.example" {
 				t.Fatal("failure launched or changed memory")
 			}
+			logs, readErr := os.ReadFile(filepath.Join(root, "logs", "oneproxy.log"))
+			if readErr != nil || !strings.Contains(string(logs), "subscription update failed") || strings.Contains(string(logs), "private") || strings.Contains(string(logs), "secret") {
+				t.Fatal("startup failure log missing or unsafe")
+			}
 			if _, err := os.Stat(filepath.Join(root, "singbox_generated.json")); !os.IsNotExist(err) {
 				t.Fatal("failure generated partial runtime config")
 			}
@@ -286,9 +312,7 @@ func TestFreshInstallWithoutSubscriptionStartsDirectly(t *testing.T) {
 	if err := startFixture("config.json", dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(snapshot); err != nil {
-		t.Fatal(err)
-	}
+	readStartupSnapshot(t, snapshot)
 	got, err := os.ReadFile(target)
 	if err != nil || !bytes.Equal(got, before) {
 		t.Fatal("placeholder not recovered intact")

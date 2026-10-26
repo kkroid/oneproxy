@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"reflect"
 	"sort"
 	"strconv"
@@ -51,16 +52,16 @@ func MergeSubscription(current *Config, incoming []ProxyConfig, subscriptionURL 
 
 	if !urlChanged {
 		// Reserve strong matches for every entry before attempting name fallback.
-		for pass := 0; pass < 4; pass++ {
+		for pass := 0; pass < 5; pass++ {
 			for incomingIndex, proxy := range prepared {
 				if _, matched := matchedIncoming[incomingIndex]; matched {
 					continue
 				}
-				if pass == 2 || pass == 3 {
+				if pass == 3 || pass == 4 {
 					count := 0
 					for _, candidate := range prepared {
-						if (pass == 2 && sameSubscriptionEndpoint(candidate, proxy)) ||
-							(pass == 3 && candidate.Type == proxy.Type && normalizedProxyName(candidate) == normalizedProxyName(proxy)) {
+						if (pass == 3 && sameSubscriptionEndpoint(candidate, proxy)) ||
+							(pass == 4 && candidate.Type == proxy.Type && normalizedProxyName(candidate) == normalizedProxyName(proxy)) {
 							count++
 						}
 					}
@@ -277,10 +278,8 @@ func prepareSubscriptionProxies(proxies []ProxyConfig) ([]ProxyConfig, error) {
 	keys := make(map[string]ProxyConfig)
 	for _, proxy := range proxies {
 		// Names distinguish plans/accounts sharing an endpoint; credentials may rotate.
-		identity := proxy.Type + "|endpoint|" + strings.ToLower(proxy.Server) + "|" + strconv.Itoa(proxy.Port) + "|name|" + normalizedProxyName(proxy)
-		hash := sha256.Sum256([]byte(identity))
 		proxy.Source = ProxySourceSubscription
-		proxy.SubscriptionKey = hex.EncodeToString(hash[:16])
+		proxy.SubscriptionKey = subscriptionProxyKey(proxy)
 		proxy.MissingUpdates = 0
 		proxy.LocalPort = 0
 		proxy.Enabled = true
@@ -321,9 +320,21 @@ func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map
 		})
 	case 1:
 		return matchBy(func(proxy ProxyConfig) bool {
-			return sameSubscriptionEndpoint(proxy, incoming) && normalizedProxyName(proxy) == normalizedProxyName(incoming)
+			// Reconstruct the pre-domain key using its original feed name. This
+			// preserves renamed nodes even if the URI's IP rotated in this feed.
+			if proxy.Source != ProxySourceSubscription || proxy.Type != "vless" || incoming.Type != "vless" ||
+				net.ParseIP(proxy.Server) == nil || !confirmedVLESSDomain.MatchString(incoming.Server) {
+				return false
+			}
+			legacy := incoming
+			legacy.Server = proxy.Server
+			return proxy.SubscriptionKey == subscriptionProxyKey(legacy)
 		})
 	case 2:
+		return matchBy(func(proxy ProxyConfig) bool {
+			return sameSubscriptionEndpoint(proxy, incoming) && normalizedProxyName(proxy) == normalizedProxyName(incoming)
+		})
+	case 3:
 		return matchBy(func(proxy ProxyConfig) bool {
 			return sameSubscriptionEndpoint(proxy, incoming)
 		})
@@ -332,6 +343,12 @@ func findSubscriptionMatch(proxies []ProxyConfig, incoming ProxyConfig, used map
 			return proxy.Type == incoming.Type && normalizedProxyName(proxy) != "" && normalizedProxyName(proxy) == normalizedProxyName(incoming)
 		})
 	}
+}
+
+func subscriptionProxyKey(proxy ProxyConfig) string {
+	identity := proxy.Type + "|endpoint|" + strings.ToLower(proxy.Server) + "|" + strconv.Itoa(proxy.Port) + "|name|" + normalizedProxyName(proxy)
+	hash := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(hash[:16])
 }
 
 func sameSubscriptionEndpoint(left, right ProxyConfig) bool {

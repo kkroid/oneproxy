@@ -20,7 +20,7 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
-var appVersion = "0.8.1" // Windows release builds set this from installer metadata.
+var appVersion = "0.8.2" // Windows release builds set this from installer metadata.
 
 var (
 	gManager       *proxy.Manager
@@ -156,6 +156,11 @@ func startProxyInDataDir(cp, dataDir string) error {
 		return err
 	}
 
+	// Init application logger (10 MB max, keep 3 rotated backups)
+	if gLogger == nil {
+		gLogger, _ = logger.New(filepath.Join(dataDir, "logs", "oneproxy.log"), 10, 3)
+	}
+
 	if cfg.SubscriptionURL != "" {
 		ctx, cancel := context.WithCancel(context.Background())
 		session := &startupSession{cancel: cancel}
@@ -179,6 +184,7 @@ func startProxyInDataDir(cp, dataDir string) error {
 			subscriptionLastErr = config.StartupSubscriptionError
 			return fmt.Errorf("%s", subscriptionLastErr)
 		}
+		logSubscriptionUpdate(cfg, next)
 		cfg = next
 		setSubscriptionUpdateSuccess()
 	}
@@ -189,10 +195,6 @@ func startProxyInDataDir(cp, dataDir string) error {
 
 	gConfig = cfg
 
-	// Init application logger (10 MB max, keep 3 rotated backups)
-	if gLogger == nil {
-		gLogger, _ = logger.New(filepath.Join(dataDir, "logs", "oneproxy.log"), 10, 3)
-	}
 	if gLogger != nil {
 		gLogger.Info("OneProxy v%s starting, route=%s, proxies=%d, port=%d", appVersion,
 			cfg.RouteMode, len(cfg.GetEnabledProxies()), cfg.Unified.Port)

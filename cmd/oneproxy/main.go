@@ -81,9 +81,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	previous := cfg
 	cfg, err = prepareCLIStartup(ctx, cfg, paths.configPath)
 	if err != nil {
 		return runtimeError(stderr, "startup", err)
+	}
+	if previous.SubscriptionURL != "" {
+		for _, message := range config.SubscriptionUpdateMessages(previous, cfg) {
+			fmt.Fprintln(stdout, message)
+		}
 	}
 	if err := ensurePrivateDir(paths.stateDir); err != nil {
 		return runtimeError(stderr, "prepare state directory", err)

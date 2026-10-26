@@ -9,7 +9,7 @@
 [CmdletBinding()]
 param(
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\trayapp\build'),
-    [string]$Installer = (Join-Path $PSScriptRoot '..\dist\OneProxy-0.8.1-setup.exe'),
+    [string]$Installer = (Join-Path $PSScriptRoot '..\dist\OneProxy-0.8.2-setup.exe'),
     [string]$Uninstaller,
     [string]$SignTool,
     [string]$CertificateThumbprint,
