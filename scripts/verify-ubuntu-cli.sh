@@ -90,7 +90,7 @@ wait_for_singbox_child() {
   for attempt in $(seq 1 60); do
     supervisor_pid="$(pgrep -P "$owner_pid" -x oneproxy | head -n1 || true)"
     if [[ -n "$supervisor_pid" ]]; then
-      child_pid="$(pgrep -P "$supervisor_pid" -x sing-box | head -n1 || true)"
+      child_pid="$(pgrep -P "$supervisor_pid" | head -n1 || true)"
       if [[ -n "$child_pid" ]]; then
         printf '%s\n' "$child_pid"
         return 0
@@ -195,7 +195,12 @@ kill -0 "$parent_pid" && kill -0 "$child_pid" || fail "foreground processes did 
 [[ "$(stat -c %a "$home_dir/.oneproxy")" == "700" ]] || fail "state directory is not 0700"
 [[ "$(stat -c %a "$home_dir/.oneproxy/logs")" == "700" ]] || fail "log directory is not 0700"
 [[ "$(stat -c %a "$home_dir/.oneproxy/singbox_generated.json")" == "600" ]] || fail "generated config is not 0600"
-[[ "$(stat -c %a "$home_dir/.oneproxy/logs/singbox.log")" == "600" ]] || fail "sing-box log is not 0600"
+dated_logs=("$home_dir"/.oneproxy/logs/singbox-????-??-??.log)
+[[ -f "${dated_logs[0]}" ]] || fail "dated sing-box log was not created"
+for dated_log in "${dated_logs[@]}"; do
+  [[ "$(stat -c %a "$dated_log")" == "600" ]] || fail "sing-box log is not 0600"
+done
+[[ "$(cat "$home_dir/.oneproxy/logs/singbox.log")" == old ]] || fail "legacy log was changed"
 ! grep -q "verification-secret" "$run_output" || fail "credential appeared in normal output"
 kill -TERM "$parent_pid"
 set +e
@@ -244,7 +249,7 @@ if [[ "${1:-}" == "check" ]]; then
   exec "$ONEPROXY_REAL_SING_BOX" "$@"
 fi
 trap '' TERM
-while :; do sleep 10; done
+exec sleep 300
 SH
 chmod 755 "$force_dir/bin/sing-box"
 force_config="$work/force.json"
@@ -266,7 +271,7 @@ set -e
 force_elapsed=$(( $(date +%s) - force_started ))
 [[ "$force_status" -eq 0 ]] || fail "forced-kill shutdown exited $force_status"
 cleanup_pids[$force_index]=""
-[[ "$force_elapsed" -ge 5 ]] || fail "SIGKILL fallback occurred before the five-second grace period"
+[[ "$force_elapsed" -ge 2 ]] || fail "SIGKILL fallback occurred before the supervisor's two-second grace period"
 assert_no_group "$force_pgid"
 
 echo "Ubuntu foreground CLI verification passed"
