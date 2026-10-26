@@ -274,7 +274,7 @@ func (w *Writer) cleanup(at time.Time) {
 			retry()
 			continue
 		}
-		if !info.Mode().IsRegular() || info.Size() > w.maxSize {
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		if err := os.Remove(filepath.Join(filepath.Dir(w.basePath), entry.Name())); err != nil && !os.IsNotExist(err) {

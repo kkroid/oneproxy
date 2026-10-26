@@ -202,9 +202,10 @@ func TestDailyRetentionUsesLocalCalendarAndStrictNames(t *testing.T) {
 	for _, name := range append(append([]string{}, expired...), kept...) {
 		put(name, []byte("untouched"))
 	}
-	oversized := "oneproxy-2026-02-23.log"
-	large := bytes.Repeat([]byte("x"), 129)
-	put(oversized, large)
+	// Size does not exempt strictly owned, expired regular files from retention.
+	for _, name := range expired {
+		put(name, bytes.Repeat([]byte("x"), 129))
+	}
 	if err := os.Mkdir(filepath.Join(dir, "oneproxy-2026-02-22.log"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -223,15 +224,15 @@ func TestDailyRetentionUsesLocalCalendarAndStrictNames(t *testing.T) {
 			t.Fatalf("unknown/retained file changed: %s %q %v", name, got, err)
 		}
 	}
-	if got, err := os.ReadFile(filepath.Join(dir, oversized)); err != nil || !bytes.Equal(got, large) {
-		t.Fatal("oversized date file changed")
+	if info, err := os.Stat(filepath.Join(dir, "oneproxy-2026-02-22.log")); err != nil || !info.IsDir() {
+		t.Fatal("non-regular date object changed")
 	}
 	if _, err := w.Write([]byte("before midnight")); err != nil {
 		t.Fatal(err)
 	}
 	oldPath := w.path
 	// A file added after startup is not scanned on every write.
-	put("oneproxy-2026-02-20.log", []byte("late"))
+	put("oneproxy-2026-02-20.log", bytes.Repeat([]byte("x"), 129))
 	if _, err := w.Write([]byte("!")); err != nil {
 		t.Fatal(err)
 	}
