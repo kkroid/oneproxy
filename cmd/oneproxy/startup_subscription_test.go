@@ -39,6 +39,9 @@ func TestCLIActualEntryUpdatesBeforeGenerationAndPreservesOnFailure(t *testing.T
 			if err := cfg.Save(path); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Chmod(path, 0600); err != nil {
+				t.Fatal(err)
+			}
 			before, _ := os.ReadFile(path)
 			var out, stderr bytes.Buffer
 			code := run([]string{"--config", path}, &out, &stderr)

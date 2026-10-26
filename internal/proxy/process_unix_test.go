@@ -37,7 +37,7 @@ func TestPlatformProcessStopEscalatesToSIGKILLUnix(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	// exec keeps a single process that ignores SIGTERM. A shell spawning sleep
 	// leaves an orphan after group SIGKILL; its reaping depends on the host init.
-	cmd := exec.Command("sh", "-c", "trap '' TERM; echo $$ > \"$1\"; exec sleep 30", "sh", ready)
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo $$ > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; exec sleep 30", "sh", ready)
 	configureProcessCommand(cmd)
 	process := platformProcess{stopTimeout: 5 * time.Second}
 	if err := process.start(cmd); err != nil {
