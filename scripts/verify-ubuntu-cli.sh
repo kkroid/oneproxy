@@ -84,6 +84,24 @@ wait_for_running() {
   fail "OneProxy did not reach the running milestone; output=$(tr '\n' ' ' <"$output")"
 }
 
+wait_for_singbox_child() {
+  local owner_pid="$1"
+  local supervisor_pid child_pid attempt
+  for attempt in $(seq 1 60); do
+    supervisor_pid="$(pgrep -P "$owner_pid" -x oneproxy | head -n1 || true)"
+    if [[ -n "$supervisor_pid" ]]; then
+      child_pid="$(pgrep -P "$supervisor_pid" -x sing-box | head -n1 || true)"
+      if [[ -n "$child_pid" ]]; then
+        printf '%s\n' "$child_pid"
+        return 0
+      fi
+    fi
+    kill -0 "$owner_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  return 1
+}
+
 assert_no_group() {
   local pgid="$1"
   if ps -eo pgid= | awk -v wanted="$pgid" '$1 == wanted { found=1 } END { exit !found }'; then
@@ -170,8 +188,7 @@ parent_pid=$!
 cleanup_pids+=("$parent_pid")
 parent_index=$((${#cleanup_pids[@]} - 1))
 wait_for_running "$parent_pid" "$run_output"
-child_pid="$(pgrep -P "$parent_pid" sing-box | head -n1)"
-[[ -n "$child_pid" ]] || fail "sing-box child was not found"
+child_pid="$(wait_for_singbox_child "$parent_pid")" || fail "sing-box child was not found"
 child_pgid="$(ps -o pgid= -p "$child_pid" | tr -d ' ')"
 sleep 2
 kill -0 "$parent_pid" && kill -0 "$child_pid" || fail "foreground processes did not sustain"
@@ -206,8 +223,7 @@ late_parent=$!
 cleanup_pids+=("$late_parent")
 late_index=$((${#cleanup_pids[@]} - 1))
 wait_for_running "$late_parent" "$late_output"
-late_child="$(pgrep -P "$late_parent" sing-box | head -n1)"
-[[ -n "$late_child" ]] || fail "late-exit child was not found"
+late_child="$(wait_for_singbox_child "$late_parent")" || fail "late-exit child was not found"
 kill -KILL "$late_child"
 set +e
 wait "$late_parent"
@@ -239,8 +255,7 @@ force_parent=$!
 cleanup_pids+=("$force_parent")
 force_index=$((${#cleanup_pids[@]} - 1))
 wait_for_running "$force_parent" "$force_output"
-force_child="$(pgrep -P "$force_parent" | head -n1)"
-[[ -n "$force_child" ]] || fail "forced-kill child was not found"
+force_child="$(wait_for_singbox_child "$force_parent")" || fail "forced-kill child was not found"
 force_pgid="$(ps -o pgid= -p "$force_child" | tr -d ' ')"
 force_started="$(date +%s)"
 kill -TERM "$force_parent"

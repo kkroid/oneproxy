@@ -262,8 +262,11 @@ try:
 finally:
     library.OneProxy_FreeString(version)
 PY
+  offscreen_plugin="$qt_root/plugins/platforms/libqoffscreen.dylib"
+  test -f "$offscreen_plugin" || { echo "Qt offscreen platform plugin not found: $offscreen_plugin" >&2; exit 1; }
   env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH -u QT_PLUGIN_PATH \
-    QT_QPA_PLATFORM=offscreen "$verified_app/Contents/MacOS/oneproxy-tray" --self-check
+    QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORM_PLUGIN_PATH="$qt_root/plugins/platforms" \
+    "$verified_app/Contents/MacOS/oneproxy-tray" --self-check
 else
   echo "Cross-compiled package verified; runtime checks require a $arch Mac."
 fi
