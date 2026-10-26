@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,8 @@ type Manager struct {
 	stopChan      chan struct{}
 	done          chan error
 	lifecycleDone chan struct{}
-	logFile       *os.File
+	logFile       *logger.Writer
+	lastOutput    *processOutput
 	process       platformProcess
 	appLog        *logger.Logger
 	autoRestart   bool
@@ -96,11 +98,18 @@ func (m *Manager) Check() error {
 	configureProcessCommand(cmd)
 	cmd.Dir = filepath.Dir(filepath.Dir(logPath))
 	cmd.Env = singboxEnvironment()
-	output, err := cmd.CombinedOutput()
+	output := &processOutput{file: io.Discard}
+	cmd.Stdout, cmd.Stderr = output, output
+	err := cmd.Run()
+	m.mutex.Lock()
+	if !m.isRunning {
+		m.lastOutput = output
+	}
+	m.mutex.Unlock()
 	if err == nil {
 		return nil
 	}
-	message := strings.TrimSpace(string(output))
+	message := safeCoreDiagnostic(output.tail)
 	if message == "" {
 		return fmt.Errorf("sing-box check failed: %w", err)
 	}
@@ -133,8 +142,7 @@ func (m *Manager) start() error {
 		return err
 	}
 
-	rotateLogs(filepath.Dir(m.logPath))
-	logFile, err := openPrivateLog(m.logPath)
+	logFile, err := logger.NewWriter(m.logPath, logger.DefaultMaxSize, logger.DefaultBackups)
 	if err != nil {
 		m.mutex.Unlock()
 		return err
@@ -210,17 +218,18 @@ func (m *Manager) stop() error {
 	return nil
 }
 
-func (m *Manager) startCommand(logFile *os.File) (*exec.Cmd, error) {
+func (m *Manager) startCommand(logFile *logger.Writer) (*exec.Cmd, error) {
 	cmd := exec.Command(m.singboxPath, "run", "--disable-color", "-c", m.configPath)
 	configureProcessCommand(cmd)
 	cmd.Dir = filepath.Dir(filepath.Dir(m.logPath))
 	cmd.Env = singboxEnvironment()
-	output := &processOutput{file: logFile}
+	output := &processOutput{file: logFile, appLog: m.appLog}
 	cmd.Stdout = output
 	cmd.Stderr = output
 	if err := m.process.start(cmd); err != nil {
 		return nil, fmt.Errorf("failed to start sing-box: %w", err)
 	}
+	m.lastOutput = output
 	return cmd, nil
 }
 
@@ -251,8 +260,30 @@ func (m *Manager) IsRunning() bool {
 	return m.isRunning && m.ready && !m.stopping
 }
 
-// GetLogs returns the last N lines from the log file.
+// GetLogs returns private, unredacted core output. After Check or a process exit,
+// it reads this attempt's final 4KiB in memory; while running it reads the file.
 func (m *Manager) GetLogs(lines int) ([]string, error) {
+	if lines <= 0 {
+		return nil, nil
+	}
+	m.mutex.RLock()
+	output, running := m.lastOutput, m.isRunning
+	m.mutex.RUnlock()
+	// After an exit, retain this attempt's private diagnostic tail even when
+	// persistence failed or the final message crossed a rotation boundary.
+	if output != nil && !running {
+		output.mu.Lock()
+		text := strings.TrimSuffix(string(output.tail), "\n")
+		output.mu.Unlock()
+		if text == "" {
+			return nil, nil
+		}
+		logLines := strings.Split(text, "\n")
+		if len(logLines) > lines {
+			logLines = logLines[len(logLines)-lines:]
+		}
+		return logLines, nil
+	}
 	file, err := os.Open(m.logPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
@@ -312,39 +343,6 @@ func prepareLogDir(dir string) error {
 		return fmt.Errorf("failed to secure log directory: %w", err)
 	}
 	return nil
-}
-
-func openPrivateLog(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-	if err := file.Chmod(0600); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("failed to secure log file: %w", err)
-	}
-	return file, nil
-}
-
-// rotateLogs deletes log files older than 5 days.
-func rotateLogs(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-120 * time.Hour)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
-		}
-	}
 }
 
 // monitor owns each process lifecycle and starts exactly one Wait per child.
@@ -418,21 +416,10 @@ func (m *Manager) monitor(cmd *exec.Cmd, stopChan <-chan struct{}, done chan<- e
 			terminalErr = nil
 			break
 		}
-		logFile, err := openPrivateLog(m.logPath)
-		if err != nil {
-			m.mutex.Unlock()
-			terminalErr = err
-			break
-		}
-		if m.logFile != nil {
-			_ = m.logFile.Close()
-		}
-		m.logFile = logFile
 		m.process.close()
-		cmd, err = m.startCommand(logFile)
+		var err error
+		cmd, err = m.startCommand(m.logFile)
 		if err != nil {
-			_ = logFile.Close()
-			m.logFile = nil
 			m.mutex.Unlock()
 			terminalErr = err
 			break
@@ -478,16 +465,24 @@ func channelClosed(ch <-chan struct{}) bool {
 	}
 }
 
-// processOutput keeps only this attempt's final diagnostic bytes, never old logs.
-// os/exec serializes Write calls when Stdout and Stderr use the same writer.
+// processOutput always drains the child, even while disk writes fail. The tail
+// belongs only to this attempt. It is never copied verbatim into application logs.
 type processOutput struct {
-	file *os.File
-	tail []byte
+	mu          sync.Mutex
+	file        io.Writer
+	appLog      *logger.Logger
+	tail        []byte
+	pending     []byte
+	lost        uint64
+	lastFailure time.Time
+	lastDNS     time.Time
+	lastTimeout time.Time
 }
 
 func (p *processOutput) Write(data []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	const limit = 4096
-	n, err := p.file.Write(data)
 	if len(data) >= limit {
 		p.tail = append(p.tail[:0], data[len(data)-limit:]...)
 	} else {
@@ -496,13 +491,117 @@ func (p *processOutput) Write(data []byte) (int, error) {
 		}
 		p.tail = append(p.tail, data...)
 	}
-	return n, err
+	n, err := p.file.Write(data)
+	if err != nil || n != len(data) {
+		p.lost += uint64(len(data) - n)
+		if p.appLog != nil && (p.lastFailure.IsZero() || time.Since(p.lastFailure) >= time.Minute) {
+			p.appLog.Warn("core log write failed; output is still drained; retrying (%d bytes lost)", p.lost)
+			p.lastFailure = time.Now()
+		}
+	} else if p.lost != 0 {
+		if p.appLog != nil {
+			p.appLog.Warn("core log writing recovered (%d bytes lost)", p.lost)
+		}
+		p.lost = 0
+		p.lastFailure = time.Time{}
+	}
+	// Bound memory for arbitrarily long output and handle tokens split across
+	// pipe writes. Classifications contain no endpoint, tag or upstream text.
+	for _, b := range data {
+		p.pending = append(p.pending, b)
+		if b == '\n' || len(p.pending) == limit {
+			p.reportDiagnostic(p.pending)
+			p.pending = p.pending[:0]
+		}
+	}
+	return len(data), nil // Never let os/exec stop draining on a logging error.
+}
+
+func coreFailureKind(data []byte) string {
+	message := strings.ToLower(string(data))
+	// A DNS exchange can itself time out: resolution takes precedence.
+	if strings.Contains(message, "lookup ") || strings.Contains(message, "exchange failed") ||
+		strings.Contains(message, "dns: ") || strings.Contains(message, "resolve domain") {
+		if strings.Contains(message, "failed") || strings.Contains(message, "timeout") ||
+			strings.Contains(message, "no such host") || strings.Contains(message, "deadline exceeded") ||
+			strings.Contains(message, "name error") || strings.Contains(message, "refused") ||
+			strings.Contains(message, "servfail") || strings.Contains(message, "nxdomain") {
+			return "dns_resolution_failed"
+		}
+	}
+	if (strings.Contains(message, "connect") || strings.Contains(message, "dial tcp")) &&
+		(strings.Contains(message, "timeout") || strings.Contains(message, "timed out") || strings.Contains(message, "deadline exceeded")) {
+		return "connection_timeout"
+	}
+	return ""
+}
+
+func (p *processOutput) reportDiagnostic(data []byte) {
+	if p.appLog == nil {
+		return
+	}
+	kind := coreFailureKind(data)
+	var last *time.Time
+	switch kind {
+	case "dns_resolution_failed":
+		last = &p.lastDNS
+	case "connection_timeout":
+		last = &p.lastTimeout
+	default:
+		return
+	}
+	if last.IsZero() || time.Since(*last) >= time.Minute {
+		p.appLog.Warn("core diagnostic: %s (upstream details omitted; repeated events limited to once per minute)", kind)
+		*last = time.Now()
+	}
+}
+
+// Diagnostic text is allowlisted, not regex-redacted: arbitrary upstream errors
+// can contain tokens/passwords without recognizable labels. Keep useful startup
+// reasons and exit codes without exposing those strings in errors or app logs.
+func safeCoreDiagnostic(data []byte) string {
+	var messages []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		message := coreFailureKind([]byte(line))
+		if message == "" {
+			lower := strings.ToLower(line)
+			switch {
+			case strings.Contains(lower, "address already in use"), strings.Contains(lower, "only one usage of each socket address"):
+				message = "listen failed: address already in use"
+			case strings.Contains(lower, "invalid generated configuration"), strings.Contains(lower, "decode config"), strings.Contains(lower, "parse config"):
+				message = "invalid generated configuration"
+			case strings.Contains(lower, "permission denied"), strings.Contains(lower, "access is denied"):
+				message = "permission denied"
+			case strings.Contains(lower, "no such file"), strings.Contains(lower, "cannot find the file"):
+				message = "required file not found"
+			case strings.Contains(lower, "certificate"), strings.Contains(lower, "private key"), strings.Contains(lower, "public key"):
+				message = "TLS certificate or key error"
+			case strings.Contains(lower, "unknown field"), strings.Contains(lower, "unknown outbound"), strings.Contains(lower, "missing"):
+				message = "invalid or missing configuration field"
+			case strings.Contains(lower, "connection refused"):
+				message = "connection refused"
+			default:
+				message = "unclassified core diagnostic (inspect private core log tail with GetLogs)"
+			}
+		}
+		if !seen[message] {
+			messages = append(messages, message)
+			seen[message] = true
+		}
+	}
+	return strings.Join(messages, "; ")
 }
 
 func processExitError(cmd *exec.Cmd, err error) error {
 	exitErr := unexpectedExitError(err)
 	if output, ok := cmd.Stderr.(*processOutput); ok {
-		if message := strings.TrimSpace(string(output.tail)); message != "" {
+		output.mu.Lock()
+		defer output.mu.Unlock()
+		if message := safeCoreDiagnostic(output.tail); message != "" {
 			return fmt.Errorf("%w: %s", exitErr, message)
 		}
 	}

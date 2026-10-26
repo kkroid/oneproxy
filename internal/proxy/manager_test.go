@@ -51,6 +51,29 @@ func runManagerHelper() {
 			_, _ = fmt.Fprintln(os.Stderr, "invalid generated configuration")
 			os.Exit(25)
 		}
+	case "secret-exit":
+		_, _ = fmt.Fprintln(os.Stderr, "upstream rejected: opaque-secret-value")
+		os.Exit(26)
+	case "output-burst":
+		var wg sync.WaitGroup
+		for _, stream := range []*os.File{os.Stdout, os.Stderr} {
+			wg.Add(1)
+			go func(stream *os.File) {
+				defer wg.Done()
+				block := strings.Repeat("bounded core output\n", 1024)
+				for i := 0; i < 320; i++ {
+					_, _ = fmt.Fprint(stream, block)
+				}
+			}(stream)
+		}
+		wg.Wait()
+		_, _ = fmt.Fprintln(os.Stderr, "output-burst-complete")
+		_ = os.WriteFile(os.Getenv("ONEPROXY_MANAGER_OUTPUT_DONE"), []byte("done"), 0600)
+	case "output-stream":
+		for {
+			_, _ = fmt.Fprintln(os.Stdout, "core output heartbeat")
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if len(os.Args) > 1 && os.Args[1] == "run" {
 		time.Sleep(time.Minute)
@@ -59,7 +82,11 @@ func runManagerHelper() {
 
 func TestForegroundManagerRejectsEarlyExitWithoutRestart(t *testing.T) {
 	manager, callsPath := newTestManager(t, false, "exit")
-	manager.startupWindow = 500 * time.Millisecond
+	t.Cleanup(func() { _ = manager.Stop() })
+	// This tests the early-exit branch, not Windows scheduling of a fresh test
+	// executable. Under concurrent race tests, helper startup exceeded 500ms.
+	// The separate default-window test checks the production observation period.
+	manager.startupWindow = 10 * time.Second
 
 	if err := manager.Start(); err == nil || !strings.Contains(err.Error(), "exited unexpectedly") {
 		t.Fatalf("Start() error = %v, want early exit", err)
