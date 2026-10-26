@@ -88,7 +88,7 @@ exit /b %ERRORLEVEL%
         if ($LASTEXITCODE) { throw "$Name compilation failed" }
     }
     Compile-Setup $baselineScript $old 'old-setup' '0.8.0'
-    Compile-Setup (Get-Content "$repo\trayapp\installer.iss" -Raw) "$repo\trayapp\build" 'fixed-setup' '0.8.1'
+    Compile-Setup (Get-Content "$repo\trayapp\installer.iss" -Raw) "$repo\trayapp\build" 'fixed-setup' '0.8.2'
     Run-Setup "$out\old-setup.exe" 'initial-install'
     if (!(Test-Path $regPath) -or !(Test-Path "$target\unins000.dat")) { throw 'Real uninstall lifecycle missing' }
     # Freeze a profile subscription without ever fetching it.
@@ -135,7 +135,7 @@ exit /b %ERRORLEVEL%
     if ($LASTEXITCODE -or (Snapshot) -ne $snapshot) { throw 'Locked application DLL setup did not preserve installation state' }
     & $harness --setup $target "$out\fixed-setup.exe"
     if ($LASTEXITCODE) { throw 'Unlocked retry with running legacy Qt failed' }
-    if ((Get-ItemProperty $regPath).DisplayVersion -ne '0.8.1') { throw 'Uninstall registration not upgraded' }
+    if ((Get-ItemProperty $regPath).DisplayVersion -ne '0.8.2') { throw 'Uninstall registration not upgraded' }
     foreach ($name in @('oneproxy-tray.exe','oneproxy.exe','oneproxy.dll','bin\sing-box.exe')) {
         if ((Get-FileHash "$target\$name").Hash -ne (Get-FileHash "$repo\trayapp\build\$name").Hash) { throw "Payload mismatch: $name" }
     }

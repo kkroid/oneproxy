@@ -269,7 +269,7 @@ VersionInfoTextVersion=$($metadata.AppVersion).0
         throw "Installer build failed"
     }
     if ($Sign -or $SigningDryRun) {
-        $postArgs = @('-NoProfile','-File',$signScript,'-Installer',(Join-Path $root 'dist\OneProxy-0.8.1-setup.exe'))
+        $postArgs = @('-NoProfile','-File',$signScript,'-Installer',(Join-Path $root "dist\OneProxy-$($metadata.AppVersion)-setup.exe"))
         if ($Sign) { $postArgs += @('-VerifyOnly','-StrictVerify','-SignTool',$SigningTool) }
         else { $postArgs += '-VerifyOnly' }
         & pwsh @postArgs
