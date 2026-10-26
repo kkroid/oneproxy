@@ -6,34 +6,45 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
-const DefaultMaxSize int64 = 10 * 1024 * 1024
+const DefaultMaxSize int64 = 64 * 1024 * 1024
 const DefaultBackups = 3
+const dateLayout = "2006-01-02"
 
-var errOversizedArchive = errors.New("logger: oversized archive already exists; manual archival required")
-
-// Writer owns the only append handle for a log. One owner per path is required.
-// Each file is bounded even when a single Write exceeds the limit; records can
-// span files. An oversized pre-upgrade active file is preserved as .oversized.
+// Writer owns the only append handle for a log. One owner per base path is
+// required. Writes are split at the byte limit and can span daily volumes.
 type Writer struct {
-	mu         sync.Mutex
-	path       string
-	maxSize    int64
-	maxFiles   int
-	file       *os.File
-	size       int64
-	closed     bool
-	rotateStep int // resumable: remove oldest, shift backups, rename active
-	lost       uint64
-	lastReport time.Time
-	retryAt    time.Time
-	lastError  error
+	mu          sync.Mutex
+	basePath    string
+	path        string
+	maxSize     int64
+	maxFiles    int
+	file        *os.File
+	size        int64
+	closed      bool
+	now         func() time.Time
+	nextCleanup time.Time
+	retryAt     time.Time
+	lastError   error
+}
+
+// DatePath maps a logical path (e.g. singbox.log) to the date in at's location.
+// Production callers use time.Now(), which uses the system's local time zone.
+func DatePath(base string, at time.Time) string {
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext) + "-" + at.Format(dateLayout) + ext
 }
 
 func NewWriter(path string, maxSize int64, maxFiles int) (*Writer, error) {
+	return newWriter(path, maxSize, maxFiles, time.Now)
+}
+
+func newWriter(path string, maxSize int64, maxFiles int, now func() time.Time) (*Writer, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
@@ -43,20 +54,34 @@ func NewWriter(path string, maxSize int64, maxFiles int) (*Writer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	w := &Writer{path: path, maxSize: maxSize, maxFiles: maxFiles}
+	at := now()
+	w := &Writer{basePath: path, path: DatePath(path, at), maxSize: maxSize, maxFiles: maxFiles, now: now}
+	w.cleanup(at)
 	if err := w.open(); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
+// Path returns the last opened date path; before the first post-midnight write
+// this is still the previous day's file.
+func (w *Writer) Path() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.path
+}
+
 func (w *Writer) open() error {
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
+	// Refuse symlinks and other unowned objects instead of following them.
+	if info, err := os.Lstat(w.path); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("logger: not a regular file")
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := f.Chmod(0600); err != nil {
-		_ = f.Close()
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
 		return err
 	}
 	info, err := f.Stat()
@@ -64,9 +89,12 @@ func (w *Writer) open() error {
 		_ = f.Close()
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		_ = f.Close()
-		return errors.New("logger: not a regular file")
+	// An externally oversized date file is left untouched; Write will fail.
+	if info.Size() <= w.maxSize {
+		if err := f.Chmod(0600); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 	w.file, w.size = f, info.Size()
 	return nil
@@ -97,70 +125,51 @@ func (w *Writer) Write(data []byte) (int, error) {
 	if len(data) == 0 {
 		return 0, nil
 	}
-	if time.Now().Before(w.retryAt) {
-		return w.failed(0, len(data), w.lastError)
-	}
-	// Recovery is visible in the file even for GUI applications without stderr.
-	if w.lost != 0 {
-		message := []byte(fmt.Sprintf("\n[oneproxy log recovered: %d bytes lost during logging failure]\n", w.lost))
-		if _, err := w.write(message); err != nil {
-			return w.failed(0, len(data), err)
+	at := w.now()
+	path := DatePath(w.basePath, at)
+	if path != w.path {
+		if err := w.closeFile(); err != nil {
+			return 0, err
 		}
-		w.lost = 0
-		w.lastReport = time.Time{}
+		w.path = path
+		w.retryAt = time.Time{}
+		w.cleanup(at)
+	} else if !at.Before(w.nextCleanup) {
+		w.cleanup(at)
+	}
+	if at.Before(w.retryAt) {
+		return 0, w.lastError
 	}
 	n, err := w.write(data)
 	if err != nil {
-		return w.failed(n, len(data), err)
-	}
-	w.retryAt = time.Time{}
-	w.lastError = nil
-	return n, nil
-}
-
-func (w *Writer) failed(n, requested int, err error) (int, error) {
-	w.lost += uint64(requested - n)
-	if !time.Now().Before(w.retryAt) {
-		w.retryAt = time.Now().Add(time.Second)
-	}
-	w.lastError = err
-	// Never include paths, data or upstream error strings in fallback diagnostics.
-	if w.lastReport.IsZero() || time.Since(w.lastReport) >= time.Minute {
-		reason := "log persistence blocked; retrying at most once per second"
-		if errors.Is(err, errOversizedArchive) {
-			reason = "log persistence blocked; manually archive the conflicting .oversized file before retry"
-		}
-		_, _ = fmt.Fprintf(os.Stderr, "OneProxy %s (%d bytes lost)\n", reason, w.lost)
-		w.lastReport = time.Now()
+		w.retryAt, w.lastError = at.Add(time.Second), err
+	} else {
+		w.retryAt, w.lastError = time.Time{}, nil
 	}
 	return n, err
 }
 
-// write is called under mu, including for recovery records.
+// write is called under mu. Errors return the exact persisted byte count;
+// process output callers continue draining even when persistence is unavailable.
 func (w *Writer) write(data []byte) (int, error) {
 	total := 0
 	for len(data) != 0 {
-		if w.rotateStep != 0 {
-			if err := w.rotate(); err != nil {
-				return total, err
-			}
-		}
 		if w.file == nil {
 			if err := w.open(); err != nil {
 				return total, err
 			}
 		}
 		if w.size > w.maxSize {
-			if err := w.preserveOversized(); err != nil {
-				return total, err
-			}
-			continue
+			_ = w.closeFile()
+			return total, errors.New("logger: date file exceeds size limit")
 		}
 		if w.size == w.maxSize {
 			if err := w.closeFile(); err != nil {
 				return total, err
 			}
-			w.rotateStep = w.maxFiles + 1
+			if err := w.rotate(); err != nil {
+				return total, err
+			}
 			continue
 		}
 		length := int64(len(data))
@@ -175,43 +184,101 @@ func (w *Writer) write(data []byte) (int, error) {
 			err = io.ErrShortWrite
 		}
 		if err != nil {
-			_ = w.closeFile() // Reopen and stat on the next call; no permanent nil sink.
+			_ = w.closeFile()
 			return total, err
 		}
 	}
 	return total, nil
 }
 
-func (w *Writer) preserveOversized() error {
-	if err := w.closeFile(); err != nil {
-		return err
-	}
-	archive := w.path + ".oversized"
-	if _, err := os.Lstat(archive); err == nil {
-		return errOversizedArchive
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	// Rename only: no multi-gigabyte read/copy, truncation, or automatic deletion.
-	return os.Rename(w.path, archive)
-}
+func (w *Writer) volume(n int) string { return fmt.Sprintf("%s.%d", w.path, n) }
 
 func (w *Writer) rotate() error {
-	for w.rotateStep > 0 {
-		step := w.rotateStep
-		var err error
-		switch {
-		case step == w.maxFiles+1:
-			err = os.Remove(fmt.Sprintf("%s.%d", w.path, w.maxFiles))
-		case step > 1:
-			err = os.Rename(fmt.Sprintf("%s.%d", w.path, step-1), fmt.Sprintf("%s.%d", w.path, step))
-		default:
-			err = os.Rename(w.path, w.path+".1")
+	// Fill the first vacant slot. A failed rename (or restart between renames)
+	// leaves that vacancy on disk, so retries do not shift survivors twice.
+	gap := 0
+	for i := 1; i <= w.maxFiles; i++ {
+		info, err := os.Lstat(w.volume(i))
+		if os.IsNotExist(err) {
+			if gap == 0 {
+				gap = i
+			}
+		} else if err != nil {
+			return err
+		} else if !info.Mode().IsRegular() || info.Size() > w.maxSize {
+			return errors.New("logger: volume is not a bounded regular file")
 		}
-		if err != nil && !os.IsNotExist(err) {
+	}
+	if gap == 0 {
+		if err := os.Remove(w.volume(w.maxFiles)); err != nil {
 			return err
 		}
-		w.rotateStep-- // Resume this exact step after a Windows sharing violation.
+		gap = w.maxFiles
 	}
-	return nil
+	for i := gap; i > 1; i-- {
+		if err := os.Rename(w.volume(i-1), w.volume(i)); err != nil {
+			return err
+		}
+	}
+	return os.Rename(w.path, w.volume(1))
+}
+
+// ownedDate accepts only this stream's exact date name and configured volumes.
+func (w *Writer) ownedDate(name string) (string, bool) {
+	base := filepath.Base(w.basePath)
+	ext := filepath.Ext(base)
+	prefix := strings.TrimSuffix(base, ext) + "-"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	if len(rest) < len(dateLayout) {
+		return "", false
+	}
+	date, suffix := rest[:len(dateLayout)], rest[len(dateLayout):]
+	if parsed, err := time.Parse(dateLayout, date); err != nil || parsed.Year() < 1 {
+		return "", false
+	}
+	if suffix == ext {
+		return date, true
+	}
+	for i := 1; i <= w.maxFiles; i++ {
+		if suffix == ext+"."+strconv.Itoa(i) {
+			return date, true
+		}
+	}
+	return "", false
+}
+
+func (w *Writer) cleanup(at time.Time) {
+	// Once per local day; locked files/read failures retry at most hourly on writes.
+	w.nextCleanup = time.Date(at.Year(), at.Month(), at.Day()+1, 0, 0, 0, 0, at.Location())
+	retry := func() {
+		if next := at.Add(time.Hour); next.Before(w.nextCleanup) {
+			w.nextCleanup = next
+		}
+	}
+	entries, err := os.ReadDir(filepath.Dir(w.basePath))
+	if err != nil {
+		retry()
+		return
+	}
+	cutoff := at.AddDate(0, 0, -4).Format(dateLayout)
+	for _, entry := range entries {
+		date, owned := w.ownedDate(entry.Name())
+		if !owned || date >= cutoff || !entry.Type().IsRegular() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			retry()
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() > w.maxSize {
+			continue
+		}
+		if err := os.Remove(filepath.Join(filepath.Dir(w.basePath), entry.Name())); err != nil && !os.IsNotExist(err) {
+			retry()
+		}
+	}
 }

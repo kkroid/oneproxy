@@ -95,7 +95,7 @@ func TestCoreDiagnosticFormatsAndPrivacy(t *testing.T) {
 
 func TestProcessOutputSplitAndConcurrentDiagnosticsAreSanitized(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	app, err := logger.New(path, 10, 3)
+	app, err := logger.New(path, 0, logger.DefaultBackups)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestProcessOutputSplitAndConcurrentDiagnosticsAreSanitized(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(logger.DatePath(path, time.Now()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +164,10 @@ func waitLogCondition(t *testing.T, condition func() bool) {
 
 func TestManagerConcurrentCoreStreamsRotateAcrossRestart(t *testing.T) {
 	m, _ := newTestManager(t, false, "output-burst")
+	if m.maxLogSize != logger.DefaultMaxSize {
+		t.Fatal("core default size diverged")
+	}
+	m.maxLogSize = 1024
 	m.startupWindow = 20 * time.Millisecond
 	t.Cleanup(func() { _ = m.Stop() })
 	donePath := filepath.Join(filepath.Dir(m.configPath), "output.done")
@@ -176,11 +180,15 @@ func TestManagerConcurrentCoreStreamsRotateAcrossRestart(t *testing.T) {
 		if !m.IsRunning() {
 			t.Fatal("output or rotation stopped core")
 		}
+		waitLogCondition(t, func() bool {
+			lines, err := m.GetLogs(1)
+			return err == nil && len(lines) == 1 && lines[0] == "output-burst-complete"
+		})
 		if err := m.Stop(); err != nil {
 			t.Fatal(err)
 		}
 		for i := 0; i <= 3; i++ {
-			name := m.logPath
+			name := logger.DatePath(m.logPath, time.Now())
 			if i > 0 {
 				name = fmt.Sprintf("%s.%d", name, i)
 			}
@@ -191,11 +199,11 @@ func TestManagerConcurrentCoreStreamsRotateAcrossRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Size() > logger.DefaultMaxSize {
+			if info.Size() > m.maxLogSize {
 				t.Fatalf("core log exceeded bound: %d", info.Size())
 			}
 		}
-		if _, err := os.Stat(m.logPath + ".1"); err != nil {
+		if _, err := os.Stat(logger.DatePath(m.logPath, time.Now()) + ".1"); err != nil {
 			t.Fatal("core output did not rotate")
 		}
 		lines, err := m.GetLogs(1)
@@ -218,21 +226,19 @@ func TestManagerBothLogsBlockedRecoverWithoutStoppingCore(t *testing.T) {
 	m.startupWindow = 20 * time.Millisecond
 	t.Cleanup(func() { _ = m.Stop() })
 	appPath := filepath.Join(filepath.Dir(m.logPath), "app.log")
-	for _, path := range []string{m.logPath, appPath} {
+	paths := []string{logger.DatePath(m.logPath, time.Now()), logger.DatePath(appPath, time.Now())}
+	for _, path := range paths {
 		file, err := os.Create(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Temporary sparse/zero-filled file: never touch installed logs.
+		// Test-only sparse file: no allocated 64MiB payload or installed logs.
 		if err := file.Truncate(logger.DefaultMaxSize + 1); err != nil {
 			t.Fatal(err)
 		}
 		_ = file.Close()
-		if err := os.WriteFile(path+".oversized", []byte("earlier evidence"), 0600); err != nil {
-			t.Fatal(err)
-		}
 	}
-	app, err := logger.New(appPath, 10, 3)
+	app, err := logger.New(appPath, 0, logger.DefaultBackups)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,20 +256,21 @@ func TestManagerBothLogsBlockedRecoverWithoutStoppingCore(t *testing.T) {
 	if !m.IsRunning() {
 		t.Fatal("logging conflict stopped core")
 	}
-	for _, path := range []string{m.logPath, appPath} {
+	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil || info.Size() != logger.DefaultMaxSize+1 {
-			t.Fatal("conflict changed/grows evidence")
+			t.Fatal("conflict changed evidence")
 		}
-		if err := os.Rename(path+".oversized", path+".manual-archive"); err != nil {
+		// Repair only our fixture; the production logger never truncates oversized files.
+		if err := os.WriteFile(path, nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	waitLogCondition(t, func() bool {
 		app.Info("application recovery probe")
-		data, _ := os.ReadFile(appPath)
-		core, _ := os.ReadFile(m.logPath)
-		return bytes.Contains(data, []byte("bytes lost")) && bytes.Contains(core, []byte("bytes lost"))
+		data, _ := os.ReadFile(paths[1])
+		core, _ := os.ReadFile(paths[0])
+		return bytes.Contains(data, []byte("application recovery probe")) && bytes.Contains(core, []byte("core output heartbeat"))
 	})
 	if !m.IsRunning() {
 		t.Fatal("recovery stopped core")
@@ -274,14 +281,46 @@ func TestManagerBothLogsBlockedRecoverWithoutStoppingCore(t *testing.T) {
 	if err := m.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{m.logPath, appPath} {
-		info, err := os.Stat(path + ".oversized")
-		if err != nil || info.Size() != logger.DefaultMaxSize+1 {
-			t.Fatal("old active file not preserved")
+	for _, path := range paths {
+		if _, err := os.Stat(path + ".oversized"); !os.IsNotExist(err) {
+			t.Fatal("created oversized archive")
 		}
-		data, _ := os.ReadFile(path + ".manual-archive")
-		if string(data) != "earlier evidence" {
-			t.Fatal("earlier archive changed")
-		}
+	}
+}
+
+func TestGetLogsReadsDatedFileWithoutProcessTail(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "singbox.log")
+	if err := os.WriteFile(base, []byte("legacy must not be read\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logger.DatePath(base, time.Now()), []byte("first\nlatest\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{logPath: base}
+	lines, err := m.GetLogs(1)
+	if err != nil || len(lines) != 1 || lines[0] != "latest" {
+		t.Fatalf("dated logs = %q, %v", lines, err)
+	}
+}
+
+func TestLogReaderDoesNotBlockRotation(t *testing.T) {
+	w, err := logger.NewWriter(filepath.Join(t.TempDir(), "singbox.log"), 4, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if _, err := w.Write([]byte("1234")); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openLogFile(w.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if n, err := w.Write([]byte("56")); n != 2 || err != nil {
+		t.Fatalf("reader blocked rotation: %d %v", n, err)
+	}
+	if data, err := io.ReadAll(reader); err != nil || string(data) != "1234" {
+		t.Fatalf("renamed reader = %q, %v", data, err)
 	}
 }

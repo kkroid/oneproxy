@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kkroid/oneproxy/internal/config"
+	"github.com/kkroid/oneproxy/internal/logger"
 )
 
 // The real Manager launches this test executable, never a real proxy. Its
@@ -167,7 +168,7 @@ func TestActualStartupSavesBeforeLaunchingAndRefreshesEveryStart(t *testing.T) {
 	if requests.Load() != 2 {
 		t.Fatal("second start did not refresh exactly once")
 	}
-	logs, err := os.ReadFile(filepath.Join(root, "logs", "oneproxy.log"))
+	logs, err := os.ReadFile(logger.DatePath(filepath.Join(root, "logs", "oneproxy.log"), time.Now()))
 	if err != nil || !strings.Contains(string(logs), "status=updated") || !strings.Contains(string(logs), "status=unchanged") {
 		t.Fatal("startup update result was not logged")
 	}
@@ -241,7 +242,7 @@ func TestActualStartupFailurePreservesFileAndNeverLaunches(t *testing.T) {
 			if gManager != nil || gConfig.Proxies[0].Server != "old.example" {
 				t.Fatal("failure launched or changed memory")
 			}
-			logs, readErr := os.ReadFile(filepath.Join(root, "logs", "oneproxy.log"))
+			logs, readErr := os.ReadFile(logger.DatePath(filepath.Join(root, "logs", "oneproxy.log"), time.Now()))
 			if readErr != nil || !strings.Contains(string(logs), "subscription update failed") || strings.Contains(string(logs), "private") || strings.Contains(string(logs), "secret") {
 				t.Fatal("startup failure log missing or unsafe")
 			}

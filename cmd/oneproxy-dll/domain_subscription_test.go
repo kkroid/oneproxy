@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kkroid/oneproxy/internal/config"
 	"github.com/kkroid/oneproxy/internal/logger"
@@ -24,7 +25,7 @@ func TestDomainUpdatePreservesSelectionAndLogsAllOutcomes(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "update.log")
 	var err error
-	gLogger, err = logger.New(logPath, 10, 3)
+	gLogger, err = logger.New(logPath, 0, logger.DefaultBackups)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestDomainUpdatePreservesSelectionAndLogsAllOutcomes(t *testing.T) {
 	if err := updateConfiguredSubscription(); err == nil || gConfig != first || restarts != 1 {
 		t.Fatal("failed update changed active config")
 	}
-	data, err := os.ReadFile(logPath)
+	data, err := os.ReadFile(logger.DatePath(logPath, time.Now()))
 	if err != nil {
 		t.Fatal(err)
 	}

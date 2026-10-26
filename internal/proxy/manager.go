@@ -26,6 +26,7 @@ type Manager struct {
 	configPath    string
 	singboxPath   string
 	logPath       string
+	maxLogSize    int64 // Internal test seam; constructors use the shared default.
 	isRunning     bool
 	ready         bool
 	stopping      bool
@@ -60,6 +61,7 @@ func newManager(singboxPath, configPath, logPath string, autoRestart bool, start
 		configPath:    configPath,
 		singboxPath:   singboxPath,
 		logPath:       logPath,
+		maxLogSize:    logger.DefaultMaxSize,
 		autoRestart:   autoRestart,
 		startupWindow: startupWindow,
 		restartDelay:  defaultRestartDelay,
@@ -142,7 +144,7 @@ func (m *Manager) start() error {
 		return err
 	}
 
-	logFile, err := logger.NewWriter(m.logPath, logger.DefaultMaxSize, logger.DefaultBackups)
+	logFile, err := logger.NewWriter(m.logPath, m.maxLogSize, logger.DefaultBackups)
 	if err != nil {
 		m.mutex.Unlock()
 		return err
@@ -267,7 +269,7 @@ func (m *Manager) GetLogs(lines int) ([]string, error) {
 		return nil, nil
 	}
 	m.mutex.RLock()
-	output, running := m.lastOutput, m.isRunning
+	output, running, writer := m.lastOutput, m.isRunning, m.logFile
 	m.mutex.RUnlock()
 	// After an exit, retain this attempt's private diagnostic tail even when
 	// persistence failed or the final message crossed a rotation boundary.
@@ -284,7 +286,11 @@ func (m *Manager) GetLogs(lines int) ([]string, error) {
 		}
 		return logLines, nil
 	}
-	file, err := os.Open(m.logPath)
+	path := logger.DatePath(m.logPath, time.Now())
+	if writer != nil {
+		path = writer.Path()
+	}
+	file, err := openLogFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}

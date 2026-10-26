@@ -5,6 +5,7 @@ package logger
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +51,7 @@ func TestWindowsActiveRenameFailureKeepsBoundAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(retained(t, w.path, 1024))
-	if !strings.HasPrefix(got, string(initial)) || !strings.Contains(got, "44 bytes lost") || !strings.HasSuffix(got, "back") {
+	if !strings.HasPrefix(got, string(initial)) || !strings.HasSuffix(got, "back") {
 		t.Fatal("rename recovery lost evidence")
 	}
 }
@@ -64,16 +65,22 @@ func TestWindowsBackupRenameFailureResumesExactStep(t *testing.T) {
 	if err := os.WriteFile(w.path+".2", []byte("backup-two"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	unlock := lockAgainstRename(t, w.path+".2")
+	unlock := lockAgainstRename(t, w.path+".1")
 	if _, err := w.Write([]byte("lost")); err == nil {
 		t.Fatal("expected backup sharing violation")
 	}
-	if w.rotateStep != 3 {
-		t.Fatalf("resume step = %d", w.rotateStep)
+	// The older backup already moved before the .1 lock stopped rotation.
+	if data, _ := os.ReadFile(w.path + ".3"); string(data) != "backup-two" {
+		t.Fatal("first rename did not complete")
 	}
+	_ = w.Close()
 	unlock()
-	w.retryAt = time.Time{}
-	if _, err := w.Write([]byte("back")); err != nil {
+	next, err := NewWriter(w.basePath, 1024, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	if _, err := next.Write([]byte("back")); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(w.path + ".3")
@@ -81,4 +88,57 @@ func TestWindowsBackupRenameFailureResumesExactStep(t *testing.T) {
 		t.Fatalf("oldest survivor lost: %q %v", data, err)
 	}
 	_ = retained(t, w.path, 1024)
+}
+
+func TestWindowsCleanupFailureRetriesOnlyOnScheduledWrite(t *testing.T) {
+	now := fixedTime().Add(-12 * time.Hour)
+	base := filepath.Join(t.TempDir(), "singbox.log")
+	old := DatePath(base, now.AddDate(0, 0, -5))
+	if err := os.WriteFile(old, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unlock := lockAgainstRename(t, old)
+	w, err := newWriter(base, 128, 3, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("locked file changed")
+	}
+	unlock()
+	now = now.Add(59 * time.Minute)
+	if _, err := w.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("cleanup retried immediately")
+	}
+	// Retry on the first write an hour after the failed cleanup, not before.
+	now = now.Add(time.Minute)
+	if _, err := w.Write([]byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("cleanup did not retry: %v", err)
+	}
+}
+
+func TestWindowsPartialWriteReturnsPersistedCount(t *testing.T) {
+	w := testWriter(t, 4)
+	if err := os.WriteFile(w.path+".1", []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unlock := lockAgainstRename(t, w.path+".1")
+	if n, err := w.Write([]byte("123456")); n != 4 || err == nil {
+		t.Fatalf("partial write = %d %v", n, err)
+	}
+	unlock()
+	w.retryAt = time.Time{}
+	if n, err := w.Write([]byte("56")); n != 2 || err != nil {
+		t.Fatalf("retry = %d %v", n, err)
+	}
+	if got := string(retained(t, w.path, 4)); got != "old123456" {
+		t.Fatalf("retry corrupted bytes: %q", got)
+	}
 }

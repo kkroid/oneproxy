@@ -1,4 +1,4 @@
-// Package logger provides thread-safe file logging with size-based rotation.
+// Package logger provides thread-safe file logging with daily, size-bounded rotation.
 package logger
 
 import (
@@ -32,7 +32,7 @@ type Logger struct{ writer *Writer }
 
 func New(path string, maxSizeMB int, maxFiles int) (*Logger, error) {
 	if maxSizeMB <= 0 {
-		maxSizeMB = 10
+		maxSizeMB = int(DefaultMaxSize / (1024 * 1024))
 	}
 	w, err := NewWriter(path, int64(maxSizeMB)*1024*1024, maxFiles)
 	if err != nil {
@@ -48,5 +48,5 @@ func (l *Logger) Error(format string, args ...interface{}) { l.log(ERROR, format
 
 func (l *Logger) log(level Level, format string, args ...interface{}) {
 	line := fmt.Sprintf("%s %-5s %s\n", time.Now().Format("2006-01-02 15:04:05"), level.String(), fmt.Sprintf(format, args...))
-	_, _ = l.writer.Write([]byte(line)) // Writer reports failures and retries subsequent writes.
+	_, _ = l.writer.Write([]byte(line)) // Best effort; subsequent writes retry persistence.
 }

@@ -60,8 +60,8 @@ func runManagerHelper() {
 			wg.Add(1)
 			go func(stream *os.File) {
 				defer wg.Done()
-				block := strings.Repeat("bounded core output\n", 1024)
-				for i := 0; i < 320; i++ {
+				block := strings.Repeat("bounded core output\n", 64)
+				for i := 0; i < 20; i++ {
 					_, _ = fmt.Fprint(stream, block)
 				}
 			}(stream)
