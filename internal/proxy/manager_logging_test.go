@@ -120,8 +120,11 @@ func TestProcessOutputSplitAndConcurrentDiagnosticsAreSanitized(t *testing.T) {
 	if strings.Count(string(got), "dns_resolution_failed") != 1 || strings.Count(string(got), "connection_timeout") != 1 {
 		t.Fatalf("missing/rate-unlimited classification: %s", got)
 	}
-	if strings.Contains(string(got), "opaque-secret-value") || strings.Contains(string(got), "192.0.2.1") || strings.Contains(string(got), "proxy.invalid") {
+	if strings.Contains(string(got), "opaque-secret-value") || strings.Contains(string(got), "proxy.invalid") {
 		t.Fatalf("upstream leaked: %s", got)
+	}
+	if !strings.Contains(string(got), "dial_ip=192.0.2.1 stage=tcp_connect") {
+		t.Fatalf("missing validated dial endpoint: %s", got)
 	}
 }
 

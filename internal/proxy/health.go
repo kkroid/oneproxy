@@ -2,10 +2,13 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kkroid/oneproxy/internal/config"
@@ -15,13 +18,16 @@ import (
 
 // HealthResult represents the health check result for a single proxy
 type HealthResult struct {
-	ProxyName  string
-	LocalPort  int
-	IsHealthy  bool
-	Latency    time.Duration
-	LastCheck  time.Time
-	ErrorCount int
-	LastError  string
+	ProxyName       string
+	LocalPort       int
+	IsHealthy       bool
+	Latency         time.Duration
+	LastCheck       time.Time
+	ErrorCount      int
+	LastError       string
+	failureSince    time.Time
+	lastFailureLog  time.Time
+	lastRecoveryLog time.Time
 }
 
 // HealthChecker manages health checking for all proxies
@@ -251,11 +257,34 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 	}
 
 	startTime := time.Now()
-	resp, err := client.Get(testURL)
+	// SOCKS hides the upstream dial/DNS/handshake. Only label stages that the
+	// HTTP client actually observes, not the proxy server's internal stages.
+	var stage atomic.Int32
+	trace := &httptrace.ClientTrace{
+		GetConn:           func(string) { stage.Store(0) },
+		TLSHandshakeStart: func() { stage.Store(1) },
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err == nil {
+				stage.Store(2)
+			}
+		},
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				stage.Store(3)
+			}
+		},
+	}
+	request, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodGet, testURL, nil)
+	if err != nil {
+		hc.updateResult(proxyName, false, 0, "invalid health URL")
+		return result
+	}
+	resp, err := client.Do(request)
 	latency := time.Since(startTime)
 
 	if err != nil {
-		hc.updateResult(proxyName, false, latency, fmt.Sprintf("%v", err))
+		phase := []string{"unknown", "target_tls_handshake", "request_write", "response_headers"}[stage.Load()]
+		hc.updateResultStage(proxyName, false, latency, fmt.Sprintf("%v", err), phase)
 		return result
 	}
 	defer resp.Body.Close()
@@ -271,6 +300,10 @@ func (hc *HealthChecker) CheckProxy(proxyName string, localPort int) *HealthResu
 
 // updateResult updates the health check result
 func (hc *HealthChecker) updateResult(proxyName string, isHealthy bool, latency time.Duration, errorMsg string) {
+	hc.updateResultStage(proxyName, isHealthy, latency, errorMsg, "unknown")
+}
+
+func (hc *HealthChecker) updateResultStage(proxyName string, isHealthy bool, latency time.Duration, errorMsg, stage string) {
 	hc.resultsMux.Lock()
 	defer hc.resultsMux.Unlock()
 
@@ -283,15 +316,22 @@ func (hc *HealthChecker) updateResult(proxyName string, isHealthy bool, latency 
 		result.IsHealthy = true
 		result.ErrorCount = 0
 		result.LastError = ""
-		if !wasHealthy && hc.appLog != nil {
-			hc.appLog.Info("node %s recovered (healthy, %v)", proxyName, latency.Round(time.Millisecond))
+		if !wasHealthy && !result.failureSince.IsZero() && hc.appLog != nil &&
+			(result.lastRecoveryLog.IsZero() || time.Since(result.lastRecoveryLog) >= time.Minute) {
+			hc.appLog.Info("health recovered node_id=%s local_port=%d elapsed=%s failure_duration=%s", nodeDiagnosticID(proxyName), result.LocalPort, latency.Round(time.Millisecond), time.Since(result.failureSince).Round(time.Millisecond))
+			result.lastRecoveryLog = time.Now()
 		}
+		result.failureSince = time.Time{}
 	} else {
 		result.IsHealthy = false
 		result.ErrorCount++
 		result.LastError = errorMsg
-		if wasHealthy && hc.appLog != nil {
-			hc.appLog.Warn("node %s went unhealthy: %s", proxyName, errorMsg)
+		if result.failureSince.IsZero() {
+			result.failureSince = result.LastCheck.Add(-latency)
+		}
+		if hc.appLog != nil && (result.lastFailureLog.IsZero() || time.Since(result.lastFailureLog) >= time.Minute) {
+			hc.appLog.Warn("health failed node_id=%s local_port=%d dial_ip=unknown stage=%s elapsed=%s kind=%s", nodeDiagnosticID(proxyName), result.LocalPort, stage, latency.Round(time.Millisecond), healthFailureKind(errorMsg))
+			result.lastFailureLog = time.Now()
 		}
 	}
 }

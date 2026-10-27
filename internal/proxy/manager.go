@@ -483,6 +483,7 @@ type processOutput struct {
 	lastFailure time.Time
 	lastDNS     time.Time
 	lastTimeout time.Time
+	lastOther   time.Time
 }
 
 func (p *processOutput) Write(data []byte) (int, error) {
@@ -539,6 +540,14 @@ func coreFailureKind(data []byte) string {
 		(strings.Contains(message, "timeout") || strings.Contains(message, "timed out") || strings.Contains(message, "deadline exceeded")) {
 		return "connection_timeout"
 	}
+	if strings.Contains(message, "error") && strings.Contains(message, "connection") {
+		if strings.Contains(message, "eof") {
+			return "connection_eof"
+		}
+		if strings.Contains(message, "forcibly closed") || strings.Contains(message, "connection reset") {
+			return "connection_reset"
+		}
+	}
 	return ""
 }
 
@@ -553,11 +562,13 @@ func (p *processOutput) reportDiagnostic(data []byte) {
 		last = &p.lastDNS
 	case "connection_timeout":
 		last = &p.lastTimeout
+	case "connection_eof", "connection_reset":
+		last = &p.lastOther
 	default:
 		return
 	}
 	if last.IsZero() || time.Since(*last) >= time.Minute {
-		p.appLog.Warn("core diagnostic: %s (upstream details omitted; repeated events limited to once per minute)", kind)
+		p.appLog.Warn("core diagnostic: %s %s (repeated events limited to once per minute)", kind, diagnosticFields(data))
 		*last = time.Now()
 	}
 }
