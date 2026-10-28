@@ -20,7 +20,7 @@ import (
 	"github.com/kkroid/oneproxy/internal/proxy"
 )
 
-var appVersion = "0.8.3" // Windows release builds set this from installer metadata.
+var appVersion = "0.8.4" // Windows release builds set this from installer metadata.
 
 var (
 	gManager       *proxy.Manager

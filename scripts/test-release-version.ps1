@@ -8,7 +8,7 @@ $build = Get-Content -LiteralPath "$root/build.ps1" -Raw
 $upgrade = Get-Content -LiteralPath "$root/scripts/test-windows-uninstall-upgrade.ps1" -Raw
 if ($installer -notmatch '(?m)^#define AppVersion "([0-9.]+)"') { throw 'Missing installer version' }
 $version = $Matches[1]
-if ($version -ne '0.8.3') { throw "Unexpected current version: $version" }
+if ($version -ne '0.8.4') { throw "Unexpected current version: $version" }
 if ($installer -notmatch "(?m)^VersionInfoVersion=$([regex]::Escape($version)).0\r?$" -or
     $dll -notmatch ('var appVersion = "' + [regex]::Escape($version) + '"') -or
     -not $signing.Contains("OneProxy-$version-setup.exe") -or
@@ -21,7 +21,8 @@ foreach ($hook in @('APP_VERSION = $metadata.AppVersion',
     "RESOURCE_VERSION = (`$metadata.AppVersion.Replace('.', ',') + ',0')",
     '-X main.appVersion=$($metadata.AppVersion)',
     'VersionInfoVersion=$($metadata.AppVersion).0',
-    'dist\OneProxy-$($metadata.AppVersion)-setup.exe')) {
+    'dist\OneProxy-$($metadata.AppVersion)-setup.exe',
+    '-Version $metadata.AppVersion')) {
     if (-not $build.Contains($hook)) { throw "Missing build metadata wiring: $hook" }
 }
 if ($dll -notmatch 'logger.New\(filepath.Join\(dataDir, "logs", "oneproxy.log"\), 0, logger.DefaultBackups\)') {

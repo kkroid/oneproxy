@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.4 - 2026-10-28
+
+### Added
+
+- Added privacy-preserving connection diagnostics; the timeout root cause remains unconfirmed.
+
 ## Unreleased
 
 ### Added
