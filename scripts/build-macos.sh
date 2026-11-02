@@ -239,7 +239,11 @@ codesign --verify --deep --strict --verbose=2 "$app"
 lipo "$output_dir/oneproxy" -verify_arch "${target_arches[@]}"
 codesign --force --sign - --timestamp=none "$output_dir/oneproxy"
 
-ditto -c -k --keepParent "$app" "$root/dist/OneProxy-macos-$arch.zip"
+mkdir -p "$tmp/package"
+ditto "$app" "$tmp/package/oneproxy-tray.app"
+cp scripts/install-macos.command "$tmp/package/Install-OneProxy.command"
+chmod 755 "$tmp/package/Install-OneProxy.command"
+ditto -c -k "$tmp/package" "$root/dist/OneProxy-macos-$arch.zip"
 
 # Verify the distributed app after a ZIP round trip, without starting a proxy.
 ditto -x -k "$root/dist/OneProxy-macos-$arch.zip" "$tmp/verify"
@@ -247,6 +251,7 @@ verified_app="$tmp/verify/oneproxy-tray.app"
 codesign --verify --deep --strict --verbose=2 "$verified_app"
 test -f "$verified_app/Contents/MacOS/liboneproxy.dylib"
 test -x "$verified_app/Contents/MacOS/oneproxy"
+test -x "$tmp/verify/Install-OneProxy.command"
 if [[ "$arch" == universal || "$arch" == "$host_arch" ]]; then
   "$verified_app/Contents/MacOS/sing-box" version
   python3 - "$verified_app/Contents/MacOS/liboneproxy.dylib" <<'PY'

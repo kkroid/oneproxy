@@ -15,6 +15,11 @@ target_link_libraries(oneproxy-instance-test PRIVATE Qt6::Test)
 add_dependencies(oneproxy-instance-test oneproxy-instance-helper)
 add_test(NAME oneproxy-instance-test COMMAND oneproxy-instance-test)
 
+add_executable(oneproxy-upgrade-test upgrade_test.cpp ../upgrade.cpp ../instance_guard.cpp)
+target_link_libraries(oneproxy-upgrade-test PRIVATE Qt6::Test Qt6::Network)
+add_test(NAME oneproxy-upgrade-test COMMAND oneproxy-upgrade-test)
+set_tests_properties(oneproxy-upgrade-test PROPERTIES TIMEOUT 60)
+
 add_executable(oneproxy-subscription-test subscription_status_test.cpp)
 target_link_libraries(oneproxy-subscription-test PRIVATE Qt6::Test)
 add_test(NAME oneproxy-subscription-test COMMAND oneproxy-subscription-test)
@@ -30,8 +35,8 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/startup_stop_test.cpp" startup_test_sourc
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/startup")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/startup/main.cpp" "${startup_tray_source}\n${startup_test_source}")
 add_executable(oneproxy-startup-stop-test "${CMAKE_CURRENT_BINARY_DIR}/startup/main.cpp"
-    ../instance_guard.cpp ../${ONEPROXY_PLATFORM_SOURCE})
+    ../instance_guard.cpp ../upgrade.cpp ../${ONEPROXY_PLATFORM_SOURCE})
 target_include_directories(oneproxy-startup-stop-test PRIVATE ..)
-target_link_libraries(oneproxy-startup-stop-test PRIVATE Qt6::Widgets)
+target_link_libraries(oneproxy-startup-stop-test PRIVATE Qt6::Widgets Qt6::Network)
 add_test(NAME oneproxy-startup-stop-test COMMAND oneproxy-startup-stop-test)
 set_tests_properties(oneproxy-startup-stop-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)

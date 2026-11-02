@@ -24,6 +24,7 @@
 #include "i18n.h"
 #include "platform/platform.h"
 #include "instance_guard.h"
+#include "upgrade.h"
 #include "subscription_status.h"
 
 // ─── DLL bindings ──────────────────────────────────
@@ -466,6 +467,18 @@ private:
 };
 
 int main(int argc, char *argv[]) {
+#ifdef Q_OS_MACOS
+    // Headless installer entry: do not load the DLL or schedule proxy startup.
+    if (argc > 1 && QByteArray(argv[1]) == "--install-update") {
+        QCoreApplication installer(argc, argv);
+        if (argc != 4) {
+            qCritical() << "Usage: --install-update source.app destination.app";
+            return 1;
+        }
+        return installMacUpdate(QString::fromLocal8Bit(argv[2]), QString::fromLocal8Bit(argv[3]),
+                                QDir::homePath() + "/.oneproxy");
+    }
+#endif
     QApplication app(argc, argv);
     // Also covers --self-check, before loading the Go core during replacement.
     if (QFileInfo::exists(QCoreApplication::applicationDirPath() + "/.oneproxy-upgrading")) {
@@ -508,6 +521,13 @@ int main(int argc, char *argv[]) {
         return 0;
     }
     auto *t = new OneProxyTray;
+#ifdef Q_OS_MACOS
+    QLocalServer upgradeServer;
+    if (!listenForUpgrade(upgradeServer, QDir::homePath() + "/.oneproxy",
+                          [t]() { return t->stopStartupWorker(); })) {
+        qWarning() << "Upgrade handoff unavailable:" << upgradeServer.errorString();
+    }
+#endif
     Platform::initializeTrayRecovery(t->tray);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, t, [t]() {
         auto error = t->stopStartupWorker();

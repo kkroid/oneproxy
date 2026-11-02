@@ -6,7 +6,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 include(CTest)
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
 endif()
@@ -26,6 +26,8 @@ add_executable(oneproxy-tray
     main.cpp
     instance_guard.cpp
     instance_guard.h
+    upgrade.cpp
+    upgrade.h
     platform/platform.h
     ${ONEPROXY_PLATFORM_SOURCE}
     resources/icons.qrc
@@ -50,7 +52,7 @@ elseif(APPLE)
     set_target_properties(oneproxy-tray PROPERTIES MACOSX_BUNDLE TRUE)
 endif()
 
-target_link_libraries(oneproxy-tray PRIVATE Qt6::Widgets)
+target_link_libraries(oneproxy-tray PRIVATE Qt6::Widgets Qt6::Network)
 
 set(ONEPROXY_LIBRARY_PATH
     "${CMAKE_SOURCE_DIR}/../${ONEPROXY_LIBRARY_NAME}"

@@ -125,6 +125,19 @@ bash scripts/build-macos.sh --arch universal --qt-root "$HOME/Qt" # Both
 
 The Qt root must contain `bin/macdeployqt` and libraries for the target architectures. The script builds, tests, bundles sing-box and rule sets, deploys Qt, applies ad-hoc signatures, and verifies the extracted ZIP. Output: `dist/OneProxy-macos-<arch>.zip`. Apps are not Apple-notarized; cross-compilation does not replace runtime testing on the target Mac. See the [cross-platform guide](docs/CROSS_PLATFORM.md).
 
+For installation/upgrades, extract the ZIP into a separate download directory and
+run `bash Install-OneProxy.command` beside the extracted app. The default target
+is `/Applications/oneproxy-tray.app`; pass a different full app path as the first
+argument if needed (its parent directory must exist and be writable).
+The installer stages and verifies the new app, asks the current user's tray to
+stop its owned core, and waits for its lifetime lock before replacing the app.
+The connection stops briefly; open the installed app to reconnect.
+Older versions without the upgrade endpoint must first be quit from their tray
+menu; the installer refuses replacement if the old instance cannot confirm exit.
+Do not use `sudo` (it selects another user's state directory). Finder drag-and-drop
+replacement does not invoke this handoff. Unknown historical orphan processes and
+independently started CLI proxies are not killed by this installer.
+
 ### Ubuntu 24.04 CLI
 
 Ubuntu support is a source-built, foreground-only CLI. It does not currently include a package, systemd unit, daemon mode, PID file, or cross-process control commands.
