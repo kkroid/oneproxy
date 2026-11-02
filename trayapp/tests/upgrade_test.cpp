@@ -45,7 +45,7 @@ private:
         owner.start(QCoreApplication::applicationFilePath(),
                     {"--owner", state, legacy ? "legacy" : fail ? "fail" : "ok"});
         QVERIFY(owner.waitForStarted());
-        QVERIFY(owner.waitForReadyRead(5000));
+        QVERIFY2(owner.waitForReadyRead(5000), owner.readAllStandardError().constData());
         QCOMPARE(owner.readLine().trimmed(), QByteArray("ready"));
         const int result = installMacUpdate(source, target, state);
         if (fail || legacy) {
@@ -87,7 +87,10 @@ int main(int argc, char **argv) {
             QFile marker(directory + "/child-reaped");
             if (!marker.open(QIODevice::WriteOnly)) return "marker failed";
             return {};
-        })) return 4;
+        })) {
+            qCritical() << server.errorString();
+            return 4;
+        }
         fprintf(stdout, "ready\n");
         fflush(stdout);
         return app.exec();

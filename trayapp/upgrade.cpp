@@ -2,6 +2,7 @@
 #include "instance_guard.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
@@ -17,7 +18,11 @@
 
 static QString socketPath(const QString &directory)
 {
-    return QDir(directory).filePath("upgrade.socket");
+    // Darwin sockaddr_un has a short path limit; HOME/test paths can exceed it.
+    // Canonical state identity keeps the endpoint stable across app locations.
+    const auto identity = QFileInfo(directory).canonicalFilePath().toUtf8();
+    const auto hash = QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("/tmp/oneproxy-upgrade-%1").arg(QString::fromLatin1(hash));
 }
 
 bool listenForUpgrade(QLocalServer &server, const QString &directory,
