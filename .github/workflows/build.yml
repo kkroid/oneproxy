@@ -145,6 +145,27 @@ jobs:
         shell: bash
         run: bash scripts/build-macos.sh --arch universal --qt-root "$QT_ROOT_DIR"
 
+      - name: Verify real macOS tray shutdown
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          app_root="$RUNNER_TEMP/oneproxy-quit-package"
+          mkdir -p "$app_root"
+          ditto -x -k dist/OneProxy-macos-universal.zip "$app_root"
+          python3 scripts/verify-macos-tray-quit.py \
+            "$app_root/oneproxy-tray.app" \
+            trayapp/build-macos-universal/tests/oneproxy-real-quit-driver \
+            dist/macos-quit-evidence
+
+      - name: Upload macOS shutdown evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macOS-shutdown-evidence
+          if-no-files-found: warn
+          path: dist/macos-quit-evidence/
+
       - name: Upload macOS app bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

@@ -40,3 +40,29 @@ target_include_directories(oneproxy-startup-stop-test PRIVATE ..)
 target_link_libraries(oneproxy-startup-stop-test PRIVATE Qt6::Widgets Qt6::Network)
 add_test(NAME oneproxy-startup-stop-test COMMAND oneproxy-startup-stop-test)
 set_tests_properties(oneproxy-startup-stop-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+if(APPLE)
+    # Test-only driver: real main/tray/DLL, no mocked exports. Only access control
+    # and a trigger for the production menu handler differ from the shipped tray.
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp" quit_driver_source)
+    string(REPLACE "private:" "public:" quit_driver_source "${quit_driver_source}")
+    set(quit_trigger [=[
+    QTimer quitTrigger;
+    QObject::connect(&quitTrigger, &QTimer::timeout, t, [t, &quitTrigger]() {
+        if (QFile::exists(qEnvironmentVariable("ONEPROXY_TEST_QUIT_FILE"))) {
+            quitTrigger.stop();
+            qInfo() << "TEST: invoking production doQuit";
+            t->doQuit();
+        }
+    });
+    quitTrigger.start(20);
+    return app.exec();
+]=])
+    string(REPLACE "return app.exec();" "${quit_trigger}" quit_driver_source "${quit_driver_source}")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/real-quit")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/real-quit/main.cpp" "${quit_driver_source}")
+    add_executable(oneproxy-real-quit-driver "${CMAKE_CURRENT_BINARY_DIR}/real-quit/main.cpp"
+        ../instance_guard.cpp ../upgrade.cpp ../${ONEPROXY_PLATFORM_SOURCE} ../resources/icons.qrc)
+    target_include_directories(oneproxy-real-quit-driver PRIVATE ..)
+    target_link_libraries(oneproxy-real-quit-driver PRIVATE Qt6::Widgets Qt6::Network)
+endif()
