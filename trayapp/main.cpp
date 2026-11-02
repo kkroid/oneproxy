@@ -398,7 +398,7 @@ private:
     void doCheck()    { runAsync([]() { callFree(pCheck()); }, 0); }
     void doFlush()    { showError("DNS flush failed", callFree(pFlush())); QTimer::singleShot(2000, this, &OneProxyTray::tick); }
     void doQuit()     {
-        auto error = callFree(pStop());
+        auto error = stopStartupWorker();
         if (!error.isEmpty()) {
             showError("Stop failed", error);
             return;

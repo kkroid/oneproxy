@@ -16,6 +16,30 @@ import (
 
 const helperProcessEnv = "ONEPROXY_MANAGER_HELPER"
 
+// A first Stop can time out. The next Quit must report that cleanup is still
+// pending instead of blocking the tray forever in an unbounded channel receive.
+func TestRepeatedStopHasDeadline(t *testing.T) {
+	done := make(chan struct{})
+	m := &Manager{isRunning: true, stopping: true, lifecycleDone: done}
+	m.process.stopTimeout = 20 * time.Millisecond
+	result := make(chan error, 1)
+	go func() { result <- m.Stop() }()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("Stop reported success before cleanup completed")
+		}
+	case <-time.After(500 * time.Millisecond):
+		close(done)
+		<-result
+		t.Fatal("repeated Stop blocked without a deadline")
+	}
+	close(done)
+	if err := m.Stop(); err != nil {
+		t.Fatalf("completed cleanup should allow retry: %v", err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	if code, handled := supervisor.Main(); handled {
 		os.Exit(code)

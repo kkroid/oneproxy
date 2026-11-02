@@ -125,8 +125,13 @@ bash scripts/build-macos.sh --arch universal --qt-root "$HOME/Qt" # Both
 
 The Qt root must contain `bin/macdeployqt` and libraries for the target architectures. The script builds, tests, bundles sing-box and rule sets, deploys Qt, applies ad-hoc signatures, and verifies the extracted ZIP. Output: `dist/OneProxy-macos-<arch>.zip`. Apps are not Apple-notarized; cross-compilation does not replace runtime testing on the target Mac. See the [cross-platform guide](docs/CROSS_PLATFORM.md).
 
-For installation/upgrades, extract the ZIP into a separate download directory and
-run `bash Install-OneProxy.command` beside the extracted app. The default target
+For ordinary macOS upgrades, choose **Quit** from the existing tray menu, wait
+for it to exit without a stop error, drag the new app over the old app, and open
+it again. Quit stops its owned sing-box and waits for startup work to finish.
+If stopping fails, do not replace the app or assume its core has exited.
+
+The optional scripted installer can instead be run with
+`bash Install-OneProxy.command` beside the separately extracted app. Its default target
 is `/Applications/oneproxy-tray.app`; pass a different full app path as the first
 argument if needed (its parent directory must exist and be writable).
 The installer stages and verifies the new app, asks the current user's tray to

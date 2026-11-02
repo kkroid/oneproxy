@@ -204,6 +204,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 download_singbox "$host_singbox_arch"
 host_singbox="$downloaded_singbox"
+if [[ "$skip_tests" -eq 0 ]]; then
+  SING_BOX_BIN="$host_singbox" go test -count=1 -v ./internal/proxy \
+    -run 'TestRealCoreStopReapsSupervisorAndCore|TestRepeatedStopHasDeadline'
+fi
 if [[ "$arch" == universal ]]; then
   download_singbox arm64
   arm_singbox="$downloaded_singbox"

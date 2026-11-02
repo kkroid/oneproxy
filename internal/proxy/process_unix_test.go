@@ -14,6 +14,56 @@ import (
 	"time"
 )
 
+// Run on macOS packaging runners with the actual distributed core, not a fake
+// process. No subscriptions or external connections are used.
+func TestRealCoreStopReapsSupervisorAndCore(t *testing.T) {
+	binary := os.Getenv("SING_BOX_BIN")
+	if binary == "" {
+		t.Skip("SING_BOX_BIN required for real core lifecycle regression")
+	}
+	dir := t.TempDir()
+	config := filepath.Join(dir, "core.json")
+	if err := os.WriteFile(config, []byte(`{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManagerWithLog(binary, config, filepath.Join(dir, "logs", "singbox.log"))
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop() })
+	supervisorPID := manager.GetPID()
+	output, err := exec.Command("ps", "-axo", "pid=,ppid=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corePID int
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		parent, _ := strconv.Atoi(fields[1])
+		if parent == supervisorPID {
+			corePID, _ = strconv.Atoi(fields[0])
+			break
+		}
+	}
+	if corePID <= 0 {
+		t.Fatal("running core child was not observed")
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	for _, pid := range []int{supervisorPID, corePID} {
+		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("Stop returned with process %d still present: %v", pid, err)
+		}
+	}
+}
+
 func TestConfigureProcessCommandUnix(t *testing.T) {
 	cmd := exec.Command("unused")
 	configureProcessCommand(cmd)

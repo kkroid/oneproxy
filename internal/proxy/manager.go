@@ -200,8 +200,7 @@ func (m *Manager) stop() error {
 	if m.stopping {
 		lifecycleDone := m.lifecycleDone
 		m.mutex.Unlock()
-		<-lifecycleDone
-		return nil
+		return m.waitForStop(lifecycleDone)
 	}
 	cmd := m.cmd
 	stopChan := m.stopChan
@@ -211,13 +210,27 @@ func (m *Manager) stop() error {
 	m.mutex.Unlock()
 
 	if cmd == nil {
-		<-lifecycleDone
-		return nil
+		return m.waitForStop(lifecycleDone)
 	}
 	if err := m.process.stop(cmd, lifecycleDone); err != nil {
 		return fmt.Errorf("failed to stop sing-box: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) waitForStop(done <-chan struct{}) error {
+	timeout := m.process.stopTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return errors.New("sing-box cleanup is still pending; retry Stop after checking the process")
+	}
 }
 
 func (m *Manager) startCommand(logFile *logger.Writer) (*exec.Cmd, error) {

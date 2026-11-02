@@ -53,7 +53,7 @@ char* fakeStop() {
 }
 char* fakeStatus() { return nullptr; }
 
-bool exercise(bool beforeDLL) {
+bool exercise(bool beforeDLL, bool quitting = false) {
     entered = stopped = downloading = false;
     registered = saved = connected = stopCalls = epochCalls = 0;
     pauseBeforeDLL = beforeDLL;
@@ -69,7 +69,8 @@ bool exercise(bool beforeDLL) {
             std::abort(); // Bound failures without destroying a joinable thread.
         }
     }
-    tray.doStop(); // Calls the real stopStartupWorker and joins the late worker.
+    if (quitting) tray.doQuit();
+    else tray.doStop();
     QCoreApplication::processEvents(); // Deliver the old completion callback.
     const bool passed = epochCalls == 1 && stopCalls == 1 && saved == 0 &&
                         connected == 0 && registered == (beforeDLL ? 0 : 1) &&
@@ -89,5 +90,5 @@ int main(int argc, char** argv) {
     pStartAtEpoch = fakeStart;
     pStop = fakeStop;
     pStatus = fakeStatus;
-    return exercise(true) && exercise(false) ? 0 : 1;
+    return exercise(true) && exercise(false) && exercise(true, true) && exercise(false, true) ? 0 : 1;
 }
