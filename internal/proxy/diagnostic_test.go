@@ -94,6 +94,7 @@ func TestHealthDiagnosticsInitialFailureFlappingAndRecovery(t *testing.T) {
 	hc := NewHealthChecker(&config.Config{}, nil)
 	hc.SetLogger(log)
 	hc.results["secret-node"] = &HealthResult{LocalPort: 10801}
+	started := time.Now()
 	for i := 0; i < 5; i++ {
 		hc.updateResult("secret-node", false, 5*time.Second, "Get https://secret:secret@secret.invalid/token: context deadline exceeded")
 		hc.updateResult("secret-node", true, time.Millisecond, "")
@@ -106,9 +107,19 @@ func TestHealthDiagnosticsInitialFailureFlappingAndRecovery(t *testing.T) {
 	if strings.Contains(text, "secret") || strings.Count(text, "health failed") != 1 || strings.Count(text, "health recovered") != 1 {
 		t.Fatalf("unsafe or unlimited diagnostics: %s", text)
 	}
-	for _, field := range []string{"local_port=10801", "stage=unknown", "dial_ip=unknown", "kind=timeout", "elapsed=5s", "failure_duration=5s"} {
+	for _, field := range []string{"local_port=10801", "stage=unknown", "dial_ip=unknown", "kind=timeout", "elapsed=5s", "failure_duration="} {
 		if !strings.Contains(text, field) {
 			t.Errorf("missing %s: %s", field, text)
+		}
+	}
+	// Recovery includes real elapsed scheduling/logging time, especially under
+	// -race; assert the duration instead of requiring the exact string "5s".
+	for _, field := range strings.Fields(text) {
+		if strings.HasPrefix(field, "failure_duration=") {
+			duration, err := time.ParseDuration(strings.TrimPrefix(field, "failure_duration="))
+			if err != nil || duration < 5*time.Second || duration > 5*time.Second+time.Since(started)+time.Millisecond {
+				t.Fatalf("invalid recovery duration %q: %v", field, err)
+			}
 		}
 	}
 	if !hc.results["secret-node"].failureSince.IsZero() {
